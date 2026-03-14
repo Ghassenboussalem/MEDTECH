@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-multipart
+chromadb
+ollama
+pymupdf
+python-docx
+httpx
+beautifulsoup4
+networkx
