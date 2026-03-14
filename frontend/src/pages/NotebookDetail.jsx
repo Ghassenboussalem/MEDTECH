@@ -96,10 +96,10 @@ export default function NotebookDetail() {
 
         {/* Right: Chat or Generate — always mounted so cache survives tab switches */}
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', display: activeTab === 'chat' ? 'flex' : 'none' }}>
+          <div style={{ flex: 1, overflow: 'hidden', flexDirection: 'column', display: activeTab === 'chat' ? 'flex' : 'none' }}>
             <ChatPanel notebookId={id} />
           </div>
-          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', display: activeTab === 'generate' ? 'flex' : 'none' }}>
+          <div style={{ flex: 1, overflow: 'hidden', flexDirection: 'column', display: activeTab === 'generate' ? 'flex' : 'none' }}>
             <GeneratePanel notebookId={id} />
           </div>
         </div>

@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator
 import ollama
 
 from embeddings import query as vector_query
+from guardrails import run_input_guards, output_safety_guard
 
 CHAT_MODEL = "llama3.2:latest"
 
@@ -47,18 +48,44 @@ async def rag_stream(
     question: str,
     history: list[dict] | None = None,
 ) -> AsyncGenerator[str, None]:
-    """Async generator: yields text tokens for a grounded RAG answer."""
+    """Async generator: yields text tokens for a grounded RAG answer.
+
+    Flow:
+      1. Run input guardrails (topic → safety → injection).
+         If any fires, yield a [GUARDRAIL] prefixed refusal and return.
+      2. Retrieve relevant chunks and build context.
+      3. Stream the LLM response.
+      4. Run output safety guard on the accumulated response.
+    """
     history = history or []
+
+    # ── 1. Input guardrails ───────────────────────────────────────────────────
+    guard_result = await run_input_guards(question)
+    if guard_result and guard_result.blocked:
+        yield f"[GUARDRAIL:{guard_result.guard}] {guard_result.message}"
+        return
+
+    # ── 2. RAG retrieval ──────────────────────────────────────────────────────
     chunks = vector_query(notebook_id, question, k=5)
     context = _build_context(chunks) if chunks else "(No documents uploaded yet.)"
     system = SYSTEM_PROMPT.format(context=context)
     messages = _build_messages(history, system, question)
 
+    # ── 3. Stream LLM response, accumulate for output guard ───────────────────
+    accumulated = []
     stream = ollama.chat(model=CHAT_MODEL, messages=messages, stream=True)
     for part in stream:
         token = part["message"]["content"]
         if token:
+            accumulated.append(token)
             yield token
+
+    # ── 4. Output safety guard ────────────────────────────────────────────────
+    full_response = "".join(accumulated)
+    out_guard = await output_safety_guard(full_response)
+    if out_guard.blocked:
+        # We already streamed the harmful content — signal the frontend to replace it
+        yield f"\n\n[GUARDRAIL:output_safety_guard] {out_guard.message}"
 
 
 async def validate_node(

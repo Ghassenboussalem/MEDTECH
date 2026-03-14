@@ -127,7 +127,7 @@ function GraphEdges({ nodeRefs, edges, graphEl }) {
       });
     });
     setLines(newLines);
-  });
+  }, [edges, graphEl]);
 
   const edgeColor = (type) => {
     if (type === 'CONFUSED_WITH') return 'rgba(239,68,68,0.55)';
