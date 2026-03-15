@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lucidity Graph — Neural Knowledge Map</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&family=DM+Sans:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #f0f4f8;
+    --surface: #ffffff;
+    --surface2: #f8fafc;
+    --border: rgba(15,23,42,0.12);
+    --border-strong: rgba(15,23,42,0.20);
+    --accent: #0ea5e9;
+    --accent-dark: #0284c7;
+    --accent2: #7c3aed;
+    --success: #10b981;
+    --success-dark: #059669;
+    --danger: #ef4444;
+    --text: #0f172a;
+    --text2: #334155;
+    --muted: #64748b;
+    --shadow-sm: 0 1px 3px rgba(15,23,42,0.08), 0 1px 2px rgba(15,23,42,0.06);
+    --shadow-md: 0 4px 12px rgba(15,23,42,0.10), 0 2px 4px rgba(15,23,42,0.06);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'DM Sans',sans-serif; height:100vh; overflow:hidden; }
+
+  /* ── LOADING SCREEN ─────────────────────────────────────────────────── */
+  #loading-screen {
+    position:fixed; inset:0; z-index:999;
+    background:linear-gradient(135deg,#0b0d1a,#0f1128);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px;
+  }
+  #loading-screen .ld-icon { font-size:64px; animation:spin 2s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #loading-screen h2 { font-family:'Syne',sans-serif; font-size:22px; color:#f1f5f9; }
+  #loading-screen p { font-size:14px; color:#94a3b8; }
+  .ld-bar { width:280px; height:6px; background:rgba(255,255,255,0.1); border-radius:3px; overflow:hidden; }
+  .ld-fill { height:100%; background:linear-gradient(90deg,#818cf8,#38bdf8); border-radius:3px; width:0%; transition:width 0.5s; }
+  #loading-error { color:#f87171; font-size:13px; text-align:center; max-width:360px; display:none; }
+
+  /* ── TOP BAR ─────────────────────────────────────────────────────────── */
+  #topbar {
+    position:fixed; top:0; left:0; right:0; height:56px;
+    background:rgba(255,255,255,0.95); backdrop-filter:blur(16px);
+    border-bottom:1px solid var(--border); box-shadow:var(--shadow-sm);
+    display:flex; align-items:center; gap:16px;
+    padding:0 20px; z-index:100;
+  }
+  #topbar .logo { font-family:'Syne',sans-serif; font-weight:800; font-size:18px; color:var(--accent-dark); letter-spacing:-0.5px; }
+  #topbar .logo span { color:var(--text); }
+  .tb-sep { width:1px; height:24px; background:var(--border-strong); }
+  .tb-badge { font-family:'Space Mono',monospace; font-size:11px; padding:5px 12px; border-radius:20px; letter-spacing:0.3px; font-weight:700; display:inline-flex; align-items:center; gap:6px; }
+  .tb-badge.lesson  { background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; }
+  .tb-badge.nodes   { background:#ede9fe; color:#5b21b6; border:1px solid #ddd6fe; }
+  .tb-badge.progress{ background:#fef3c7; color:#92400e; border:1px solid #fde68a; }
+  #topbar .spacer { flex:1; }
+  .tb-btn { background:var(--surface); border:1px solid var(--border-strong); color:var(--text); font-family:'DM Sans',sans-serif; font-size:13px; padding:6px 14px; border-radius:8px; cursor:pointer; transition:all 0.2s; font-weight:600; box-shadow:var(--shadow-sm); text-decoration:none; display:inline-flex; align-items:center; }
+  .tb-btn:hover { border-color:var(--text); box-shadow:var(--shadow-md); }
+
+  /* ── LEFT PANEL ──────────────────────────────────────────────────────── */
+  #left-panel {
+    position:fixed; left:0; top:56px; bottom:0; width:280px;
+    background:var(--surface); border-right:1px solid var(--border);
+    box-shadow:var(--shadow-sm); display:flex; flex-direction:column; z-index:50; overflow:hidden;
+  }
+  .panel-header { padding:16px; border-bottom:1px solid var(--border); font-family:'Syne',sans-serif; font-size:11px; font-weight:700; letter-spacing:2px; color:var(--muted); text-transform:uppercase; background:var(--surface2); }
+  .source-list { flex:1; overflow-y:auto; padding:12px; }
+  .source-item { display:flex; align-items:center; gap:10px; padding:10px; border-radius:8px; background:var(--surface2); border:1px solid var(--border); margin-bottom:8px; font-size:12px; font-weight:500; color:var(--text2); }
+  .source-item .stype { font-size:16px; }
+  .source-item .sname { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .source-item .sdone { color:var(--success-dark); font-size:12px; font-weight:700; }
+
+  /* ── CANVAS ───────────────────────────────────────────────────────────── */
+  #canvas-wrap {
+    position:fixed; left:280px; top:56px; right:380px; bottom:0;
+    overflow:hidden; background:linear-gradient(145deg,#f8fafc 0%,#f1f5f9 100%);
+  }
+  #canvas-wrap::after { content:''; position:absolute; inset:0; background-image:radial-gradient(circle,rgba(148,163,184,0.3) 1px,transparent 1px); background-size:32px 32px; pointer-events:none; }
+  #graph-svg { width:100%; height:100%; position:relative; z-index:1; }
+
+  /* ── NODES & EDGES ───────────────────────────────────────────────────── */
+  .node-group { cursor:pointer; transition:transform 0.2s; }
+  .node-group:hover { transform:scale(1.05); }
+  .node-label { font-family:'Syne',sans-serif; font-weight:700; text-anchor:middle; dominant-baseline:central; pointer-events:none; }
+  .node-sublabel { font-family:'DM Sans',sans-serif; font-weight:600; text-anchor:middle; dominant-baseline:central; pointer-events:none; }
+  .node-group.active-node .node-circle { stroke:var(--success); stroke-width:6px; filter:drop-shadow(0 0 14px rgba(16,185,129,0.5)); }
+  .edge-line { stroke-width:2.5; stroke-opacity:0.2; fill:none; transition:all 0.3s; }
+  .edge-line.active  { stroke-opacity:0.8; stroke-width:4; }
+  .edge-line.locked  { stroke-opacity:0.1; stroke-dasharray:5 7; }
+  .float-a { animation:floatA 6s ease-in-out infinite; }
+  .float-b { animation:floatB 7s ease-in-out infinite; }
+  .float-c { animation:floatC 8s ease-in-out infinite; }
+  @keyframes floatA { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+  @keyframes floatB { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+  @keyframes floatC { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
+
+  /* ── RIGHT PANEL ──────────────────────────────────────────────────────── */
+  #right-panel {
+    position:fixed; right:0; top:56px; bottom:0; width:380px;
+    background:var(--surface); border-left:1px solid var(--border);
+    box-shadow:-2px 0 12px rgba(15,23,42,0.04);
+    display:flex; flex-direction:column; z-index:50; overflow:hidden;
+  }
+  #empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--muted); text-align:center; padding:30px; }
+  #empty-state .big-icon { font-size:48px; margin-bottom:12px; opacity:0.5; }
+  #node-detail { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+  #node-detail.hidden { display:none; }
+  .detail-header { padding:16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; background:var(--surface2); }
+  .detail-node-icon { width:42px; height:42px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:20px; }
+  .detail-node-title { font-family:'Syne',sans-serif; font-size:16px; font-weight:700; color:var(--text); line-height:1.2; }
+  .detail-node-type { font-size:11px; color:var(--muted); margin-top:4px; font-family:'Space Mono',monospace; }
+  .detail-scroll { flex:1; overflow-y:auto; padding:16px; }
+  /* ── RICH CONTENT CARD ──────────────────────────────────────────────────── */
+  .content-loading { display:flex; align-items:center; gap:10px; padding:20px 16px; color:var(--muted); font-size:13px; }
+  .content-spinner { width:18px; height:18px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.8s linear infinite; flex-shrink:0; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  .content-section { margin-bottom:18px; border-radius:12px; overflow:hidden; border:1px solid var(--border); }
+  .content-section-header {
+    display:flex; align-items:center; gap:8px; padding:10px 14px;
+    font-family:'Syne',sans-serif; font-size:11px; font-weight:700;
+    letter-spacing:1.2px; text-transform:uppercase;
+    background:var(--surface2); border-bottom:1px solid var(--border);
+  }
+  .cs-what   .content-section-header { color:#0284c7; border-bottom-color:#bae6fd; background:#f0f9ff; }
+  .cs-facts  .content-section-header { color:#059669; border-bottom-color:#a7f3d0; background:#f0fdf4; }
+  .cs-why    .content-section-header { color:#7c3aed; border-bottom-color:#ddd6fe; background:#f5f3ff; }
+  .cs-deeper .content-section-header { color:#b45309; border-bottom-color:#fde68a; background:#fffbeb; }
+  .content-section-body { padding:14px; font-size:13px; line-height:1.7; color:var(--text2); background:var(--surface); }
+  .fact-bullet {
+    display:flex; gap:8px; align-items:flex-start; padding:6px 0;
+    border-bottom:1px solid var(--border);
+    font-size:13px; color:var(--text2); line-height:1.5;
+  }
+  .fact-bullet:last-child { border-bottom:none; }
+  .fact-dot { color:var(--accent); font-size:16px; line-height:1.3; flex-shrink:0; }
+
+  .node-connections-header { font-family:'Syne',sans-serif; font-size:11px; font-weight:700; color:var(--muted); letter-spacing:1px; text-transform:uppercase; margin:20px 0 10px; }
+
+
+  /* ── QUIZ PANEL ───────────────────────────────────────────────────────── */
+  #quiz-panel { position:absolute; inset:0; background:var(--surface); display:flex; flex-direction:column; z-index:200; transform:translateY(100%); transition:transform 0.3s ease-out; }
+  #quiz-panel.open { transform:translateY(0); }
+  .quiz-header { padding:16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; background:var(--surface2); }
+  .quiz-title { font-family:'Syne',sans-serif; font-size:15px; font-weight:700; }
+  .quiz-close { font-size:16px; cursor:pointer; color:var(--muted); padding:4px 8px; }
+  .quiz-body { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; }
+  .q-label { font-family:'Space Mono',monospace; font-size:11px; font-weight:700; color:var(--muted); margin-bottom:12px; text-transform:uppercase; letter-spacing:1px; }
+  .q-text { font-size:14px; font-weight:600; margin-bottom:16px; line-height:1.5; color:var(--text); }
+  .mcq-option { display:flex; align-items:center; gap:12px; padding:12px 16px; border:2px solid var(--border); border-radius:10px; margin-bottom:10px; cursor:pointer; transition:all 0.2s; font-size:13px; font-weight:500; background:var(--surface2); }
+  .mcq-option:hover { border-color:var(--accent); background:#f0f9ff; }
+  .mcq-option input { accent-color:var(--accent); transform:scale(1.2); cursor:pointer; }
+  .tutor-select-card { display:flex; align-items:center; gap:14px; padding:16px; border:2px solid var(--border); border-radius:12px; margin-bottom:12px; cursor:pointer; transition:all 0.2s; background:var(--surface); }
+  .tutor-select-card:hover { border-color:var(--accent2); background:#f5f3ff; transform:translateX(4px); }
+  .tutor-icon { font-size:28px; }
+  .tutor-info h5 { font-family:'Syne',sans-serif; font-size:14px; color:var(--text); margin-bottom:4px; }
+  .tutor-info p { font-size:12px; color:var(--muted); line-height:1.4; }
+  .chat-container { flex:1; display:flex; flex-direction:column; gap:12px; background:var(--surface2); border:1px solid var(--border); border-radius:12px; padding:16px; overflow-y:auto; margin-bottom:16px; min-height:280px; }
+  .chat-bubble { max-width:85%; padding:12px 16px; border-radius:16px; font-size:13px; line-height:1.5; animation:popIn 0.3s ease-out; }
+  .chat-tutor { background:white; border:1px solid var(--border); align-self:flex-start; border-bottom-left-radius:4px; box-shadow:var(--shadow-sm); }
+  .chat-user  { background:var(--accent); color:white; align-self:flex-end; border-bottom-right-radius:4px; }
+  .chat-typing { background:var(--surface2); border:1px solid var(--border); align-self:flex-start; border-bottom-left-radius:4px; padding:12px 16px; font-size:18px; animation:pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .chat-input-area { display:flex; gap:10px; }
+  .chat-input { flex:1; padding:12px 16px; border:2px solid var(--border-strong); border-radius:10px; font-family:'DM Sans',sans-serif; font-size:13px; outline:none; transition:border-color 0.2s; }
+  .chat-input:focus { border-color:var(--accent); }
+  .chat-send-btn { padding:0 20px; background:var(--text); color:white; border:none; border-radius:10px; font-family:'Syne',sans-serif; font-weight:700; cursor:pointer; transition:transform 0.2s; }
+  .chat-send-btn:hover { transform:translateY(-2px); }
+  .action-btn { width:100%; padding:14px; margin-top:10px; background:var(--accent); color:white; border:none; border-radius:8px; font-weight:700; cursor:pointer; font-family:'Syne',sans-serif; font-size:14px; }
+  .shake { animation:shake 0.4s ease; }
+  .unlock-flash { animation:unlockFlash 0.6s ease; }
+  @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-6px)} 40%{transform:translateX(6px)} 60%{transform:translateX(-4px)} 80%{transform:translateX(4px)} }
+  @keyframes unlockFlash { 0%{opacity:0;transform:scale(0.8)} 50%{opacity:1;transform:scale(1.1)} 100%{transform:scale(1)} }
+  @keyframes popIn { 0%{opacity:0;transform:translateY(10px) scale(0.95)} 100%{opacity:1;transform:translateY(0) scale(1)} }
+</style>
+</head>
+<body>
+
+<!-- LOADING SCREEN -->
+<div id="loading-screen">
+  <div class="ld-icon">🧠</div>
+  <h2>Loading your Knowledge Graph</h2>
+  <p id="ld-stage">Connecting to the agent pipeline...</p>
+  <div class="ld-bar"><div class="ld-fill" id="ld-fill"></div></div>
+  <div id="loading-error"></div>
+</div>
+
+<!-- TOP BAR -->
+<div id="topbar">
+  <div class="logo">Lucidity<span>Graph</span></div>
+  <div class="tb-sep"></div>
+  <div class="tb-badge lesson" id="badge-lesson">📄 Loading...</div>
+  <div class="tb-badge nodes"  id="badge-nodes">0 / 0 Unlocked</div>
+  <div class="tb-badge progress" id="badge-progress">0% Mastered</div>
+  <div class="spacer"></div>
+  <a class="tb-btn" href="index.html">← New Graph</a>
+  <button class="tb-btn" onclick="resetGraph()" style="margin-left:8px">↺ Reset</button>
+</div>
+
+<!-- LEFT PANEL -->
+<div id="left-panel">
+  <div class="panel-header">Knowledge Sources</div>
+  <div class="source-list" id="source-list"></div>
+</div>
+
+<!-- MAIN CANVAS -->
+<div id="canvas-wrap">
+  <svg id="graph-svg" style="width:100%;height:100%;display:block;">
+    <g id="edges-layer"></g>
+    <g id="nodes-layer"></g>
+  </svg>
+</div>
+
+<!-- RIGHT PANEL -->
+<div id="right-panel">
+  <div id="empty-state">
+    <div class="big-icon">🔭</div>
+    <p style="font-size:15px;font-weight:600;color:var(--text)">Explore the Map</p>
+    <p style="font-size:13px;margin-top:8px;line-height:1.5">Click the unlocked root node to begin. Pass quizzes to unlock neighbors.</p>
+  </div>
+
+  <div id="node-detail" class="hidden">
+    <div class="detail-header">
+      <div class="detail-node-icon" id="detail-icon"></div>
+      <div>
+        <div class="detail-node-title" id="detail-title"></div>
+        <div class="detail-node-type"  id="detail-type"></div>
+      </div>
+    </div>
+    <div class="detail-scroll" id="detail-scroll"></div>
+    <button class="start-quiz-btn" id="start-quiz-btn" onclick="openQuiz()">
+      🎯 Take Quiz to Unlock Path
+    </button>
+  </div>
+
+  <!-- QUIZ PANEL -->
+  <div id="quiz-panel">
+    <div class="quiz-header">
+      <div class="quiz-title" id="quiz-title">Knowledge Check</div>
+      <div class="quiz-close" onclick="closeQuiz()">✕</div>
+    </div>
+    <div class="quiz-body">
+
+      <!-- State 1: MCQ -->
+      <div id="quiz-mcq-view">
+        <div class="q-label">Assessment</div>
+        <div class="q-text" id="q-text">Loading question...</div>
+        <div id="mcq-options"></div>
+        <button class="action-btn" onclick="scoreMCQ()">Submit Answer</button>
+      </div>
+
+      <!-- State 3: Live Chat -->
+      <div id="quiz-interactive-chat" style="display:none;height:100%;flex-direction:column">
+        <div class="q-label" id="chat-tutor-label">Tutor Session</div>
+        <div class="chat-container" id="chat-box"></div>
+        <div class="chat-input-area" id="chat-input-area">
+          <input type="text" class="chat-input" id="chat-input"
+            placeholder="Type your answer..."
+            onkeypress="if(event.key==='Enter') sendChatMessage()">
+          <button class="chat-send-btn" id="send-btn" onclick="sendChatMessage()">Send</button>
+        </div>
+        <button class="action-btn" id="chat-retry-btn"
+          style="display:none;background:var(--success)" onclick="resetToMCQ()">
+          ✓ Ready? Retake the Quiz
+        </button>
+      </div>
+
+      <!-- State 4: Success -->
+      <div id="quiz-success-view" style="display:none;text-align:center;padding-top:30px">
+        <div style="font-size:54px;margin-bottom:12px">🎉</div>
+        <div class="q-text" style="color:var(--success-dark);font-size:20px">Node Mastered!</div>
+        <p style="font-size:14px;color:var(--muted);margin-bottom:24px">Neighboring nodes unlocked on your map.</p>
+        <button class="action-btn" onclick="closeQuiz()">Continue Exploring</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+
+// ── Global State ──────────────────────────────────────────────────────────
+let NODES = [];
+let LESSON_TITLE = '';
+let FILES = [];
+let SESSION_ID = '';
+let selectedNode = null;
+let currentTutor = null;
+let chatHistory = [];
+let currentQuizIndex = 0;
+let consecutiveFails = 0;
+
+// ── Load Graph from API ───────────────────────────────────────────────────
+async function loadGraph() {
+  const params = new URLSearchParams(window.location.search);
+  const sessionId = params.get('id');
+  if (!sessionId) { showLoadError('No session ID in URL. <a href="index.html">Go back</a>'); return; }
+
+  setLdStage('Fetching graph data...', 30);
+
+  try {
+    const res = await fetch(`${API}/api/graph/${sessionId}`);
+    if (res.status === 202) {
+      // Still processing — poll
+      setLdStage('Pipeline still running...', 50);
+      await pollUntilReady(sessionId);
+      return;
+    }
+    if (!res.ok) {
+      const e = await res.json();
+      throw new Error(e.error || 'Failed to load graph');
+    }
+    const data = await res.json();
+    initGraph(data);
+  } catch (err) {
+    showLoadError('Error: ' + err.message);
+  }
+}
+
+async function pollUntilReady(sessionId) {
+  return new Promise((resolve, reject) => {
+    const iv = setInterval(async () => {
+      try {
+        const res = await fetch(`${API}/api/status/${sessionId}`);
+        const s = await res.json();
+        setLdStage(s.stage, s.percent);
+        if (s.status === 'done') {
+          clearInterval(iv);
+          const r = await fetch(`${API}/api/graph/${sessionId}`);
+          const data = await r.json();
+          initGraph(data);
+          resolve();
+        } else if (s.status === 'error') {
+          clearInterval(iv);
+          showLoadError('Pipeline error: ' + s.error);
+          reject();
+        }
+      } catch (e) { clearInterval(iv); reject(e); }
+    }, 2000);
+  });
+}
+
+function setLdStage(text, pct) {
+  document.getElementById('ld-stage').textContent = text;
+  document.getElementById('ld-fill').style.width = (pct||0) + '%';
+}
+
+function showLoadError(html) {
+  const err = document.getElementById('loading-error');
+  err.innerHTML = html; err.style.display = 'block';
+  document.querySelector('#loading-screen .ld-icon').textContent = '⚠️';
+}
+
+function initGraph(data) {
+  NODES = data.nodes || [];
+  LESSON_TITLE = data.lesson_title || 'My Lesson';
+  FILES = data.files || [];
+  // Grab session id from URL for node-content calls
+  SESSION_ID = new URLSearchParams(window.location.search).get('id') || '';
+
+  // Hide loading screen
+  document.getElementById('loading-screen').style.display = 'none';
+
+  // Populate top bar
+  document.getElementById('badge-lesson').textContent = '📄 ' + LESSON_TITLE;
+
+  // Populate source list
+  const list = document.getElementById('source-list');
+  list.innerHTML = FILES.map(f => `
+    <div class="source-item">
+      <span class="stype">📄</span>
+      <span class="sname">${f}</span>
+      <span class="sdone">✓</span>
+    </div>
+  `).join('');
+
+  buildEdges();
+  buildNodes();
+  updateBadges();
+}
+
+// ── Graph Rendering ───────────────────────────────────────────────────────
+function setViewBox() {
+  const svg = document.getElementById('graph-svg');
+  if (!NODES.length) return;
+  let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+  NODES.forEach(n => {
+    minX = Math.min(minX, n.x - n.r - 80); minY = Math.min(minY, n.y - n.r - 80);
+    maxX = Math.max(maxX, n.x + n.r + 80); maxY = Math.max(maxY, n.y + n.r + 80);
+  });
+  svg.setAttribute('viewBox', `${minX} ${minY} ${maxX-minX} ${maxY-minY}`);
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+}
+
+function buildEdges() {
+  setViewBox();
+  const layer = document.getElementById('edges-layer');
+  layer.innerHTML = '';
+  const drawn = new Set();
+  NODES.forEach(n => {
+    (n.connections || []).forEach(cid => {
+      const target = NODES.find(x => x.id === cid);
+      if (!target) return;
+      const key = [n.id, cid].sort().join('-');
+      if (drawn.has(key)) return;
+      drawn.add(key);
+      const active = n.mastered || target.mastered;
+      const bothUnlocked = n.unlocked && target.unlocked;
+      const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+      line.setAttribute('x1', n.x); line.setAttribute('y1', n.y);
+      line.setAttribute('x2', target.x); line.setAttribute('y2', target.y);
+      line.setAttribute('stroke', active ? n.color : '#cbd5e1');
+      line.setAttribute('class', `edge-line ${active?'active':''} ${!bothUnlocked?'locked':''}`);
+      layer.appendChild(line);
+    });
+  });
+}
+
+function buildNodes() {
+  const layer = document.getElementById('nodes-layer');
+  layer.innerHTML = '';
+  NODES.forEach(n => {
+    const posG = document.createElementNS('http://www.w3.org/2000/svg','g');
+    posG.setAttribute('transform', `translate(${n.x},${n.y})`);
+    const actionG = document.createElementNS('http://www.w3.org/2000/svg','g');
+    actionG.setAttribute('id', `node-${n.id}`);
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('class', `node-group ${n.float||'float-a'}`);
+    if (selectedNode && selectedNode.id === n.id) g.classList.add('active-node');
+    g.addEventListener('click', () => selectNode(n.id));
+
+    // Shadow
+    const shadow = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    shadow.setAttribute('r', n.r + 6);
+    shadow.setAttribute('fill', n.unlocked ? n.color : '#94a3b8');
+    shadow.setAttribute('opacity', n.unlocked ? '0.15' : '0.1');
+    g.appendChild(shadow);
+
+    // Main circle
+    const c = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    c.setAttribute('r', n.r);
+    c.setAttribute('class', 'node-circle');
+    if (n.unlocked) {
+      c.setAttribute('fill', 'white');
+      c.setAttribute('stroke', n.color);
+      c.setAttribute('stroke-width', n.mastered ? '5' : '3');
+    } else {
+      c.setAttribute('fill', '#e2e8f0'); c.setAttribute('stroke', '#cbd5e1');
+      c.setAttribute('stroke-width', '2.5'); c.setAttribute('stroke-dasharray', '6 5');
+    }
+    g.appendChild(c);
+
+    // Tint
+    if (n.unlocked) {
+      const tint = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      tint.setAttribute('r', n.r - 3);
+      tint.setAttribute('fill', n.color);
+      tint.setAttribute('opacity', n.mastered ? '0.15' : '0.05');
+      g.appendChild(tint);
+    }
+
+    // Emoji label
+    const emojiSize = n.r > 70 ? '44' : n.r > 50 ? '30' : '22';
+    const label = document.createElementNS('http://www.w3.org/2000/svg','text');
+    label.setAttribute('y', n.sublabel ? '-10' : '0');
+    label.setAttribute('font-size', emojiSize);
+    label.setAttribute('class', 'node-label');
+    label.setAttribute('fill', n.unlocked ? '#0f172a' : '#64748b');
+    label.textContent = n.label || '📌';
+    g.appendChild(label);
+
+    // Sublabel
+    if (n.sublabel) {
+      n.sublabel.split('\n').forEach((line, i) => {
+        const sl = document.createElementNS('http://www.w3.org/2000/svg','text');
+        sl.setAttribute('y', (n.r > 70 ? 24 : n.r > 50 ? 16 : 14) + i * 16);
+        sl.setAttribute('font-size', n.r > 70 ? '14' : n.r > 50 ? '12' : '10');
+        sl.setAttribute('class', 'node-sublabel');
+        sl.setAttribute('fill', n.unlocked ? '#334155' : '#94a3b8');
+        sl.textContent = line;
+        g.appendChild(sl);
+      });
+    }
+
+    // Lock overlay
+    if (!n.unlocked) {
+      const lock = document.createElementNS('http://www.w3.org/2000/svg','text');
+      lock.setAttribute('y', '8');
+      lock.setAttribute('font-size', n.r > 70 ? '24' : '16');
+      lock.setAttribute('class', 'node-label'); lock.setAttribute('fill', '#64748b');
+      lock.textContent = '🔒';
+      g.appendChild(lock);
+    }
+
+    // Mastered badge
+    if (n.mastered) {
+      const bx = n.r * 0.75, by = -n.r * 0.75;
+      const badge = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      badge.setAttribute('cx', bx); badge.setAttribute('cy', by);
+      badge.setAttribute('r', '12'); badge.setAttribute('fill', '#10b981');
+      g.appendChild(badge);
+      const check = document.createElementNS('http://www.w3.org/2000/svg','text');
+      check.setAttribute('x', bx); check.setAttribute('y', by+4);
+      check.setAttribute('font-size','12'); check.setAttribute('text-anchor','middle');
+      check.setAttribute('fill','white'); check.setAttribute('font-weight','bold');
+      check.textContent = '✓';
+      g.appendChild(check);
+    }
+
+    actionG.appendChild(g);
+    posG.appendChild(actionG);
+    layer.appendChild(posG);
+  });
+}
+
+// ── Node Selection ────────────────────────────────────────────────────────
+function selectNode(id) {
+  const n = NODES.find(x => x.id === id);
+  if (!n) return;
+  if (!n.unlocked) {
+    const el = document.getElementById(`node-${id}`);
+    if(el) { el.classList.add('shake'); setTimeout(() => el.classList.remove('shake'), 400); }
+    return;
+  }
+  selectedNode = n;
+  buildNodes();
+
+  document.getElementById('empty-state').style.display = 'none';
+  const detail = document.getElementById('node-detail');
+  detail.classList.remove('hidden');
+
+  const colors = {root:'#0ea5e9',chapter:'#7c3aed',section:'#3b82f6',sub:'#f59e0b'};
+  const col = colors[n.type] || '#0ea5e9';
+  document.getElementById('detail-icon').style.background = col + '22';
+  document.getElementById('detail-icon').style.border = `2px solid ${col}55`;
+  document.getElementById('detail-icon').textContent = n.label;
+  document.getElementById('detail-title').textContent = (n.sublabel||'').replace('\n',' ') || n.label;
+  document.getElementById('detail-type').textContent = `${(n.type||'node').toUpperCase()} · LEVEL ${n.level}`;
+
+  // Render placeholder + start loading detailed content
+  const scroll = document.getElementById('detail-scroll');
+  scroll.innerHTML = `
+    <div class="content-loading">
+      <div class="content-spinner"></div>
+      <span>Loading detailed explanation…</span>
+    </div>
+    <div class="node-connections-header">Connected Nodes</div>
+    ${(n.connections||[]).map(cid => {
+      const cn = NODES.find(x => x.id === cid);
+      if (!cn) return '';
+      return `<div style="display:flex;align-items:center;gap:10px;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;font-size:13px;font-weight:500;color:${cn.unlocked?'var(--text)':'var(--muted)'}">
+        <div style="width:12px;height:12px;border-radius:50%;background:${cn.unlocked?(colors[cn.type]||'#ccc'):'#e2e8f0'}"></div>
+        <div style="flex:1">${(cn.sublabel||cn.label||'').replace('\n',' ')}</div>
+        <div style="font-size:10px;font-family:'Space Mono',monospace;font-weight:700;color:${cn.unlocked?'var(--success-dark)':'var(--muted)'}">${cn.unlocked?'OPEN':'LOCKED'}</div>
+      </div>`;
+    }).join('')}
+  `;
+
+  // Async: fetch and inject rich content
+  loadNodeContent(n, scroll);
+
+  const btn = document.getElementById('start-quiz-btn');
+  if (n.mastered) {
+    btn.style.background = 'var(--success)'; btn.textContent = '✓ Node Mastered'; btn.onclick = () => {};
+  } else {
+    btn.style.background = 'linear-gradient(135deg,var(--accent),var(--accent2))';
+    btn.textContent = '🎯 Take Quiz to Unlock Path'; btn.onclick = openQuiz;
+  }
+}
+
+/**
+ * Fetch rich content from ContentAgent and inject it into the panel,
+ * replacing the loading spinner.
+ */
+async function loadNodeContent(node, scrollEl) {
+  const nodeTitle = (node.sublabel || '').replace('\n', ' ') || node.label;
+  try {
+    const res = await fetch(`${API}/api/node-content`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: SESSION_ID,
+        node_title: nodeTitle,
+        node_summary: node.summary || ''
+      })
+    });
+    const data = await res.json();
+    const richHTML = parseContent(data.content || '', node);
+    // Replace only the spinner (first child) with rich HTML
+    const spinner = scrollEl.querySelector('.content-loading');
+    if (spinner) spinner.outerHTML = richHTML;
+    else scrollEl.insertAdjacentHTML('afterbegin', richHTML);
+  } catch (e) {
+    const spinner = scrollEl.querySelector('.content-loading');
+    if (spinner) spinner.outerHTML = `<div style="padding:14px;font-size:13px;color:var(--muted)">⚠️ Could not load content. Is the backend running?</div>`;
+  }
+}
+
+/**
+ * Parse the LLM's 4-section text into styled HTML blocks.
+ * Sections are delimited by **Header Name** markers.
+ */
+function parseContent(text, node) {
+  const sectionDefs = [
+    { key: 'what',   label: 'What is it?',   icon: '📖', cls: 'cs-what'  },
+    { key: 'facts',  label: 'Key Facts',     icon: '⚡', cls: 'cs-facts' },
+    { key: 'why',    label: 'Why it matters', icon: '🎯', cls: 'cs-why'  },
+    { key: 'deeper', label: 'Dig deeper',    icon: '🔭', cls: 'cs-deeper'},
+  ];
+
+  // Match each section heading
+  const sectionRegex = /\*\*([^*]+)\*\*/g;
+  const parts = text.split(sectionRegex);
+
+  const sections = {};
+  for (let i = 1; i < parts.length; i += 2) {
+    const heading = parts[i].trim().toLowerCase();
+    const body = (parts[i + 1] || '').trim();
+    sectionDefs.forEach(def => {
+      if (heading.includes(def.key)) sections[def.key] = body;
+    });
+  }
+
+  // Fallback: put entire text as "what"
+  if (!Object.keys(sections).length) {
+    sections.what = text || node.summary || 'No detailed content available.';
+  }
+
+  let html = '';
+  sectionDefs.forEach(def => {
+    const body = sections[def.key];
+    if (!body) return;
+
+    let bodyHTML;
+    if (def.key === 'facts') {
+      const bullets = body.split(/\n/).map(l => l.replace(/^[•\-*]\s*/, '').trim()).filter(Boolean);
+      bodyHTML = bullets.map(b => `
+        <div class="fact-bullet">
+          <span class="fact-dot">•</span>
+          <span>${escHtml(b)}</span>
+        </div>`).join('');
+    } else {
+      bodyHTML = `<p>${escHtml(body).replace(/\n/g, '<br>')}</p>`;
+    }
+
+    html += `
+      <div class="content-section ${def.cls}">
+        <div class="content-section-header">${def.icon} ${def.label}</div>
+        <div class="content-section-body">${bodyHTML}</div>
+      </div>`;
+  });
+
+  return html || `<div style="padding:14px;font-size:13px;color:var(--muted)">${escHtml(node.summary || 'No content available.')}</div>`;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Quiz Flow ─────────────────────────────────────────────────────────────
+function openQuiz() {
+  if (!selectedNode || !selectedNode.quiz || selectedNode.quiz.length === 0) { alert('No quiz available for this node.'); return; }
+  document.getElementById('quiz-panel').classList.add('open');
+  currentQuizIndex = 0;
+  consecutiveFails = 0;
+  resetToMCQ();
+}
+function closeQuiz() { document.getElementById('quiz-panel').classList.remove('open'); }
+
+function resetToMCQ() {
+  // Ensure we handle legacy nodes that might have a single dict object instead of an array
+  let quizzes = selectedNode.quiz;
+  if (!Array.isArray(quizzes)) { quizzes = [quizzes]; }
+  
+  const quiz = quizzes[currentQuizIndex];
+  
+  document.getElementById('q-text').textContent = quiz.question;
+  const container = document.getElementById('mcq-options');
+  container.innerHTML = '';
+
+  // Update assessment label to show progress
+  const qLabel = document.querySelector('#quiz-mcq-view .q-label');
+  if (qLabel) qLabel.textContent = `Question ${currentQuizIndex + 1} of ${quizzes.length}`;
+
+  // Shuffle options so correct answer (always at data index 0) appears randomly
+  const correctAnswer = quiz.options[quiz.correct ?? 0];
+  const shuffled = [...quiz.options]
+    .map((opt, i) => ({ opt, isCorrect: i === (quiz.correct ?? 0) }))
+    .sort(() => Math.random() - 0.5);
+
+  shuffled.forEach(({ opt, isCorrect }) => {
+    const label = document.createElement('label');
+    label.className = 'mcq-option';
+    const input = document.createElement('input');
+    input.type = 'radio'; input.name = 'mcq'; input.value = opt;
+    input.dataset.correct = isCorrect ? 'true' : 'false';
+    label.appendChild(input);
+    label.appendChild(document.createTextNode(' ' + opt));
+    container.appendChild(label);
+  });
+
+  document.getElementById('quiz-mcq-view').style.display = 'block';
+  document.getElementById('quiz-interactive-chat').style.display = 'none';
+  document.getElementById('quiz-success-view').style.display = 'none';
+}
+
+function scoreMCQ() {
+  const selected = document.querySelector('input[name="mcq"]:checked');
+  if (!selected) { alert('Please select an answer.'); return; }
+
+  let quizzes = selectedNode.quiz;
+  if (!Array.isArray(quizzes)) { quizzes = [quizzes]; }
+
+  if (selected.dataset.correct === 'true') {
+    consecutiveFails = 0;
+    currentQuizIndex++;
+    if (currentQuizIndex >= quizzes.length) {
+      selectedNode.mastered = true;
+      unlockNeighbors(selectedNode.id);
+      updateBadges();
+      document.getElementById('quiz-mcq-view').style.display = 'none';
+      document.getElementById('quiz-success-view').style.display = 'block';
+      buildEdges(); buildNodes(); selectNode(selectedNode.id);
+    } else {
+      resetToMCQ();
+    }
+  } else {
+    consecutiveFails++;
+    document.getElementById('quiz-mcq-view').style.display = 'none';
+    
+    // Auto-progress to different tutors
+    if (consecutiveFails === 1) startChat('feynman');
+    else if (consecutiveFails === 2) startChat('socratic');
+    else startChat('devil');
+  }
+}
+
+// ── Tutor Chat ────────────────────────────────────────────────────────────
+function startChat(type) {
+  currentTutor = type;
+  chatHistory = [];
+  const labels = { feynman:'🧒 Feynman Style', socratic:'🏛️ Socratic Method', devil:"😈 Devil's Advocate" };
+  document.getElementById('chat-tutor-label').textContent = `Tutor: ${labels[type]} (Attempt ${consecutiveFails})`;
+  document.getElementById('quiz-interactive-chat').style.display = 'flex';
+  document.getElementById('chat-box').innerHTML = '';
+  document.getElementById('chat-input-area').style.display = 'flex';
+  document.getElementById('chat-retry-btn').style.display = 'none';
+  document.getElementById('chat-input').value = '';
+
+  // Opening greeting from tutor (real LLM)
+  const greetings = {
+    feynman: "🧒 Hey there! Let's make this super simple. Tell me — in your own words — what do you think this concept is about?",
+    socratic: "🏛️ Welcome. Let us begin. What question first comes to your mind when you hear this topic?",
+    devil: "😈 Interesting topic. Let me challenge you — convince me this concept actually matters. Why should anyone care?"
+  };
+  appendChat(greetings[type], 'tutor');
+  chatHistory.push({ role: 'assistant', content: greetings[type] });
+}
+
+async function sendChatMessage() {
+  const inputEl = document.getElementById('chat-input');
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  appendChat(text, 'user');
+  chatHistory.push({ role: 'user', content: text });
+  inputEl.value = '';
+
+  // Disable input while waiting
+  document.getElementById('send-btn').disabled = true;
+  const typingEl = appendChat('...', 'typing');
+
+  try {
+    const res = await fetch(`${API}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: currentTutor,
+        node_title: (selectedNode.sublabel || '').replace('\n', ' ') || selectedNode.label,
+        node_summary: selectedNode.summary || '',
+        message: text,
+        history: chatHistory
+      })
+    });
+    const data = await res.json();
+    typingEl.remove();
+    const reply = data.response || '(no response)';
+    appendChat(reply, 'tutor');
+    chatHistory.push({ role: 'assistant', content: reply });
+
+    // After ≥ 2 exchanges, show retry button
+    if (chatHistory.filter(m => m.role === 'user').length >= 2) {
+      document.getElementById('chat-retry-btn').style.display = 'block';
+    }
+  } catch (e) {
+    typingEl.remove();
+    appendChat('(Could not reach Ollama. Is the backend running?)', 'tutor');
+  } finally {
+    document.getElementById('send-btn').disabled = false;
+  }
+}
+
+function appendChat(text, sender) {
+  const box = document.getElementById('chat-box');
+  const div = document.createElement('div');
+  div.className = sender === 'typing' ? 'chat-bubble chat-typing' : `chat-bubble chat-${sender}`;
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
+
+// ── Unlock & Badges ───────────────────────────────────────────────────────
+function unlockNeighbors(nodeId) {
+  const n = NODES.find(x => x.id === nodeId);
+  if (!n) return;
+  (n.connections || []).forEach(cid => {
+    const cn = NODES.find(x => x.id === cid);
+    if (cn && !cn.unlocked) {
+      cn.unlocked = true;
+      const el = document.getElementById(`node-${cid}`);
+      if (el) el.classList.add('unlock-flash');
+    }
+  });
+}
+
+function updateBadges() {
+  const total = NODES.length;
+  const unlocked = NODES.filter(n => n.unlocked).length;
+  const mastered = NODES.filter(n => n.mastered).length;
+  document.getElementById('badge-nodes').textContent = `${unlocked} / ${total} Unlocked`;
+  document.getElementById('badge-progress').textContent = `${Math.round(mastered/total*100)}% Mastered`;
+}
+
+function resetGraph() {
+  NODES.forEach(n => { n.unlocked = (n.id === 'root'); n.mastered = false; });
+  selectedNode = null;
+  document.getElementById('empty-state').style.display = 'flex';
+  document.getElementById('node-detail').classList.add('hidden');
+  buildEdges(); buildNodes(); updateBadges(); closeQuiz();
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', loadGraph);
+</script>
+</body>
+</html>

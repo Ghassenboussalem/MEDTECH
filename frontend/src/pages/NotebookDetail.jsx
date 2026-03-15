@@ -4,6 +4,7 @@ import useNotebookStore from '../store/useNotebookStore';
 import SourcePanel from '../components/SourcePanel';
 import ChatPanel from '../components/ChatPanel';
 import GeneratePanel from '../components/GeneratePanel';
+import PDFModal from '../components/PDFModal';
 
 export default function NotebookDetail() {
   const { id } = useParams();
@@ -32,6 +33,7 @@ export default function NotebookDetail() {
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <PDFModal notebookId={id} />
       {/* ── Top bar ──────────────────────────────────────────────── */}
       <header style={{
         height: 58,

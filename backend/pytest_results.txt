@@ -1,0 +1,32 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.10.0, pytest-7.4.3, pluggy-1.6.0 -- C:\Users\Ghassen\AppData\Local\Programs\Python\Python310\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Ghassen\Downloads\medtech\backend
+plugins: hydra-core-1.2.0.dev1, anyio-3.7.1, langsmith-0.4.49, asyncio-0.21.1, cov-7.0.0
+asyncio: mode=strict
+collecting ... collected 16 items
+
+test_guardrails.py::TestTopicGuard::test_off_topic_cooking_is_blocked PASSED [  6%]
+test_guardrails.py::TestTopicGuard::test_off_topic_sports_is_blocked PASSED [ 12%]
+test_guardrails.py::TestTopicGuard::test_valid_educational_question_passes PASSED [ 18%]
+test_guardrails.py::TestTopicGuard::test_academic_science_question_passes PASSED [ 25%]
+test_guardrails.py::TestSafetyGuard::test_weapon_construction_is_blocked PASSED [ 31%]
+test_guardrails.py::TestSafetyGuard::test_harmful_chemistry_is_blocked PASSED [ 37%]
+test_guardrails.py::TestSafetyGuard::test_academic_chemistry_passes PASSED [ 43%]
+test_guardrails.py::TestInjectionGuard::test_explicit_override_is_blocked PASSED [ 50%]
+test_guardrails.py::TestInjectionGuard::test_role_hijack_is_blocked PASSED [ 56%]
+test_guardrails.py::TestInjectionGuard::test_system_recon_is_blocked PASSED [ 62%]
+test_guardrails.py::TestInjectionGuard::test_innocent_rules_keyword_passes PASSED [ 68%]
+test_guardrails.py::TestInjectionGuard::test_explain_instructions_keyword_passes PASSED [ 75%]
+test_guardrails.py::TestOutputSafetyGuard::test_normal_educational_answer_passes PASSED [ 81%]
+test_guardrails.py::TestOutputSafetyGuard::test_harmful_output_is_blocked PASSED [ 87%]
+test_guardrails.py::TestRunInputGuards::test_pipeline_blocks_off_topic PASSED [ 93%]
+test_guardrails.py::TestRunInputGuards::test_pipeline_passes_valid_question PASSED [100%]
+
+============================== warnings summary ===============================
+test_guardrails.py: 16 warnings
+  C:\Users\Ghassen\Downloads\medtech\backend\test_guardrails.py:27: DeprecationWarning: There is no current event loop
+    return asyncio.get_event_loop().run_until_complete(coro)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 16 passed, 16 warnings in 2.42s =======================

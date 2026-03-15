@@ -7,6 +7,9 @@ const useNotebookStore = create((set, get) => ({
   current: null,
   loading: false,
   error: null,
+  selectedCitation: null,
+
+  setSelectedCitation: (meta) => set({ selectedCitation: meta }),
 
   // ── Notebook CRUD ───────────────────────────────────────────────────────
   fetchNotebooks: async () => {

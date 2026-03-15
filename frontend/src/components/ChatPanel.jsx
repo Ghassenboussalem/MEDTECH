@@ -2,29 +2,27 @@ import { useState, useRef, useEffect } from 'react';
 import CitationChip from './CitationChip';
 
 /**
- * Parse AI response text and extract [Source, p.N] citations.
- * Returns an array of { type: 'text'|'citation', value, source, page }
+ * Parse AI response text and extract [1] numeric citations.
+ * Returns an array of { type: 'text'|'citation', value, metadata }
  */
-function parseMessage(text) {
+function parseMessage(text, metaList) {
   const parts = [];
-  const re = /\[([^\]]+),\s*p\.(\d+)\]|\[([^\]]+)\]/g;
+  const re = /\[(\d+)\]/g;
   let last = 0;
   let m;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push({ type: 'text', value: text.slice(last, m.index) });
-    if (m[1]) {
-      parts.push({ type: 'citation', source: m[1].trim(), page: parseInt(m[2], 10) });
-    } else {
-      parts.push({ type: 'citation', source: m[3].trim(), page: null });
-    }
+    const idx = parseInt(m[1], 10);
+    const meta = (metaList || []).find(x => x.id === idx) || { id: idx, source: 'Unknown Segment' };
+    parts.push({ type: 'citation', metadata: meta });
     last = re.lastIndex;
   }
   if (last < text.length) parts.push({ type: 'text', value: text.slice(last) });
   return parts;
 }
 
-function AIMessage({ text }) {
-  const parts = parseMessage(text);
+function AIMessage({ text, metadata }) {
+  const parts = parseMessage(text, metadata);
   return (
     <div style={{
       display: 'flex', gap: 10, alignItems: 'flex-start',
@@ -49,7 +47,7 @@ function AIMessage({ text }) {
         {parts.map((p, i) =>
           p.type === 'text'
             ? <span key={i}>{p.value}</span>
-            : <CitationChip key={i} source={p.source} page={p.page} />
+            : <CitationChip key={i} metadata={p.metadata} />
         )}
       </div>
     </div>
@@ -114,15 +112,29 @@ export default function ChatPanel({ notebookId }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
+  const [welcomeData, setWelcomeData] = useState(null);
+  const [fetchingWelcome, setFetchingWelcome] = useState(false);
+
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
+
+  useEffect(() => {
+    if (messages.length === 0 && notebookId && !welcomeData && !fetchingWelcome) {
+      setFetchingWelcome(true);
+      fetch(`/notebooks/${notebookId}/welcome`)
+        .then(res => res.json())
+        .then(data => setWelcomeData(data))
+        .catch(e => console.error("Welcome metadata error:", e))
+        .finally(() => setFetchingWelcome(false));
+    }
+  }, [messages.length, notebookId, welcomeData, fetchingWelcome]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streaming]);
 
-  const sendMessage = async () => {
-    const q = input.trim();
+  const sendMessage = async (questionText = input) => {
+    const q = questionText.trim();
     if (!q || streaming) return;
     setInput('');
     const userMsg = { role: 'user', content: q };
@@ -131,6 +143,7 @@ export default function ChatPanel({ notebookId }) {
 
     const history = messages.map((m) => ({ role: m.role, content: m.content }));
     let aiText = '';
+    let aiMetadata = [];
 
     try {
       const res = await fetch(`/notebooks/${notebookId}/chat`, {
@@ -144,7 +157,7 @@ export default function ChatPanel({ notebookId }) {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
 
-      setMessages((m) => [...m, { role: 'assistant', content: '' }]);
+      setMessages((m) => [...m, { role: 'assistant', content: '', metadata: [] }]);
 
       while (true) {
         const { done, value } = await reader.read();
@@ -156,9 +169,21 @@ export default function ChatPanel({ notebookId }) {
             const data = line.slice(6);
             if (data === '[DONE]') continue;
             aiText += data;
+
+            // Extract metadata block if present
+            const metaMatch = aiText.match(/\[METADATA\]([\s\S]*?)\[\/METADATA\]/);
+            if (metaMatch) {
+              try {
+                aiMetadata = JSON.parse(metaMatch[1]);
+              } catch (e) {
+                console.error("Failed to parse AI metadata", e);
+              }
+              aiText = aiText.replace(/\[METADATA\][\s\S]*?\[\/METADATA\]/, '');
+            }
+
             setMessages((m) => {
               const copy = [...m];
-              copy[copy.length - 1] = { role: 'assistant', content: aiText };
+              copy[copy.length - 1] = { role: 'assistant', content: aiText, metadata: aiMetadata };
               return copy;
             });
           }
@@ -185,19 +210,66 @@ export default function ChatPanel({ notebookId }) {
         {messages.length === 0 && !streaming && (
           <div style={{
             height: '100%', display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center', gap: 12,
-            color: 'var(--text-muted)',
+            alignItems: 'center', justifyContent: 'center', gap: 24,
           }}>
-            <div style={{ fontSize: '2.5rem' }}>💬</div>
-            <p style={{ fontWeight: 500 }}>Chat with your documents</p>
-            <p style={{ fontSize: '13px' }}>Ask anything about your uploaded sources</p>
+            <div style={{
+              width: 56, height: 56, borderRadius: 16,
+              background: 'var(--accent-glow)', color: 'var(--accent)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: '28px',
+            }}>✨</div>
+            
+            {fetchingWelcome || !welcomeData ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
+                <div className="skeleton" style={{ width: 280, height: 20, borderRadius: 4 }} />
+                <div className="skeleton" style={{ width: 240, height: 20, borderRadius: 4 }} />
+              </div>
+            ) : (
+              <div style={{ maxWidth: 500, textAlign: 'center', animation: 'fade-in 0.3s ease' }}>
+                <p style={{
+                  fontSize: '16px', lineHeight: 1.6, color: 'var(--text-primary)',
+                  fontWeight: 500, marginBottom: 24,
+                }}>
+                  {welcomeData.summary}
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
+                  {welcomeData.questions.map((q, i) => (
+                    <button
+                      key={i}
+                      onClick={() => sendMessage(q)}
+                      className="suggested-q-card"
+                      style={{
+                        padding: '12px 20px', background: 'var(--bg-elevated)',
+                        border: '1px solid var(--border)', borderRadius: 20,
+                        fontSize: '14px', color: 'var(--text-secondary)',
+                        cursor: 'pointer', transition: 'all 0.15s ease',
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--accent)';
+                        e.currentTarget.style.color = 'var(--accent)';
+                        e.currentTarget.style.transform = 'translateY(-1px)';
+                        e.currentTarget.style.boxShadow = '0 2px 8px var(--accent-glow)';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--border)';
+                        e.currentTarget.style.color = 'var(--text-secondary)';
+                        e.currentTarget.style.transform = 'none';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {messages.map((msg, i) =>
             msg.role === 'user'
               ? <UserMessage key={i} text={msg.content} />
-              : <AIMessage key={i} text={msg.content} />
+              : <AIMessage key={i} text={msg.content} metadata={msg.metadata} />
           )}
           {streaming && messages[messages.length - 1]?.role !== 'assistant' && <StreamingDot />}
         </div>

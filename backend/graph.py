@@ -64,7 +64,7 @@ class GraphBuilder:
     def save(self):
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         payload = {
-            "graph": nx.node_link_data(self.graph),
+            "graph": nx.node_link_data(self.graph, edges="links"),
             "sessions": self._sessions,
         }
         self._graph_path.write_text(
@@ -132,19 +132,40 @@ class GraphBuilder:
                 "flagged_for_review":   False,
             })
 
-        # ── Step 2: Add PREREQUISITE_OF edges ────────────────────────────────
-        # Equivalent to: for tx in transactions: self.graph.add_edge(from, to, weight=value)
-        for f in fundamentals:
-            for i in intermediates:
-                if self.graph.has_node(f) and self.graph.has_node(i):
-                    self.graph.add_edge(f, i,
-                        edge_type="PREREQUISITE_OF", weight=1.0, constraint="HARD")
+        # ── Step 2: Add PREREQUISITE_OF edges (sparse, not all-to-all) ───────
+        # Each intermediate connects to at most 2 nearest fundamentals,
+        # each advanced to at most 2 nearest intermediates.
+        # This prevents the spaghetti star topology.
+        def _sparse_prereqs(sources: list, targets: list, max_per_target: int = 2):
+            if not sources or not targets:
+                return
+            for t_idx, t in enumerate(targets):
+                if not self.graph.has_node(t):
+                    continue
+                # Connect to the `max_per_target` sources closest in index
+                step = max(1, len(sources) // max_per_target)
+                chosen = sources[t_idx % len(sources) : t_idx % len(sources) + max_per_target]
+                if not chosen:
+                    chosen = sources[:max_per_target]
+                for s in chosen:
+                    if self.graph.has_node(s) and s != t:
+                        self.graph.add_edge(s, t,
+                            edge_type="PREREQUISITE_OF", weight=1.0, constraint="HARD")
 
-        for i in intermediates:
-            for a in advanced_list:
-                if self.graph.has_node(i) and self.graph.has_node(a):
-                    self.graph.add_edge(i, a,
-                        edge_type="PREREQUISITE_OF", weight=1.0, constraint="HARD")
+        _sparse_prereqs(fundamentals, intermediates, max_per_target=2)
+        _sparse_prereqs(intermediates, advanced_list, max_per_target=2)
+
+        # Also add RELATED_TO edges within the same tier for sibling concepts
+        def _sibling_edges(tier: list, max_links: int = 1):
+            for i, a in enumerate(tier):
+                for b in tier[i+1:i+1+max_links]:
+                    if self.graph.has_node(a) and self.graph.has_node(b):
+                        self.graph.add_edge(a, b, edge_type="RELATED_TO", weight=0.5)
+
+        _sibling_edges(fundamentals,  max_links=1)
+        _sibling_edges(intermediates, max_links=1)
+        _sibling_edges(advanced_list, max_links=1)
+
 
         # ── Step 3: Pre-seed known MisconceptionNodes ─────────────────────────
         for c in concepts_json.get("essential_concepts", []):

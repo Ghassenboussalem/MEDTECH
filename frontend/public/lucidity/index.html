@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lucidity Graph — Upload PDFs</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body { overflow-x: hidden; }
+
+  /* ── NAV ──────────────────────────────────────────────────────────────── */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; height: 60px;
+    display: flex; align-items: center; padding: 0 32px; gap: 16px;
+    background: rgba(11,13,26,0.85); backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--glass-border); z-index: 100;
+  }
+  .logo {
+    font-family: 'Syne', sans-serif; font-size: 20px; font-weight: 800;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .logo span { -webkit-text-fill-color: var(--text2); }
+  nav .spacer { flex: 1; }
+  .nav-tag {
+    font-family: 'Space Mono', monospace; font-size: 10px;
+    color: var(--text2); letter-spacing: 1px; text-transform: uppercase;
+  }
+
+  /* ── HERO ─────────────────────────────────────────────────────────────── */
+  .hero {
+    min-height: 100vh; padding: 100px 32px 60px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 48px;
+    position: relative; overflow: hidden;
+  }
+  .hero-bg-orb {
+    position: absolute; border-radius: 50%; filter: blur(80px); pointer-events: none;
+    animation: glow-pulse 4s ease-in-out infinite;
+  }
+  .orb-1 { width: 500px; height: 500px; background: rgba(129,140,248,0.12); top: -100px; left: -100px; }
+  .orb-2 { width: 400px; height: 400px; background: rgba(56,189,248,0.10); bottom: -50px; right: -50px; }
+  .orb-3 { width: 300px; height: 300px; background: rgba(167,139,250,0.08); top: 50%; left: 50%; transform: translate(-50%,-50%); }
+
+  /* ── HEADER TEXT ─────────────────────────────────────────────────────── */
+  .hero-header { text-align: center; animation: fadeUp 0.6s ease-out; position: relative; z-index: 1; }
+  .hero-header h1 {
+    font-size: clamp(36px, 6vw, 72px); font-weight: 800; line-height: 1.1;
+    margin-bottom: 20px;
+  }
+  .hero-header p {
+    font-size: 18px; color: var(--text2); max-width: 540px; margin: 0 auto;
+    line-height: 1.7; font-weight: 300;
+  }
+
+  /* ── MAIN CARD ───────────────────────────────────────────────────────── */
+  .upload-card {
+    width: 100%; max-width: 640px; padding: 36px;
+    animation: fadeUp 0.7s 0.1s ease-out both;
+    position: relative; z-index: 1;
+  }
+
+  /* Lesson Title */
+  .field-label {
+    font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700;
+    color: var(--accent); letter-spacing: 2px; text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .lesson-input {
+    width: 100%; padding: 14px 18px;
+    background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border);
+    border-radius: 12px; color: var(--text); font-family: 'DM Sans', sans-serif;
+    font-size: 16px; font-weight: 500; outline: none;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .lesson-input::placeholder { color: var(--muted); }
+  .lesson-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(129,140,248,0.2); }
+
+  /* Drop Zone */
+  .drop-zone {
+    width: 100%; padding: 44px 28px;
+    border: 2px dashed rgba(129,140,248,0.3); border-radius: 16px;
+    background: rgba(129,140,248,0.04);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 12px; cursor: pointer; transition: all 0.25s; text-align: center;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent); background: rgba(129,140,248,0.10);
+    transform: scale(1.01);
+  }
+  .drop-icon { font-size: 42px; line-height: 1; }
+  .drop-title { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; color: var(--text); }
+  .drop-sub { font-size: 13px; color: var(--text2); }
+  .drop-hint { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--muted); }
+  #file-input { display: none; }
+
+  /* File List */
+  #file-list { display: flex; flex-direction: column; gap: 8px; }
+  .file-item {
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    background: rgba(129,140,248,0.08); border: 1px solid rgba(129,140,248,0.2);
+    border-radius: 10px; animation: fadeUp 0.3s ease-out;
+  }
+  .file-icon { font-size: 18px; flex-shrink: 0; }
+  .file-name { flex: 1; font-size: 13px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-size { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--text2); flex-shrink: 0; }
+  .file-remove { background: none; border: none; color: var(--muted); font-size: 14px; cursor: pointer; padding: 4px; border-radius: 6px; transition: color 0.2s; flex-shrink: 0; }
+  .file-remove:hover { color: var(--danger); }
+
+  /* CTA */
+  .cta-area { padding-top: 4px; }
+  #generate-btn { width: 100%; padding: 16px; font-size: 16px; border-radius: 14px; }
+  #generate-btn .btn-sub { font-size: 12px; opacity: 0.75; font-weight: 400; font-family: 'DM Sans', sans-serif; }
+
+  /* ── HOW IT WORKS ─────────────────────────────────────────────────────── */
+  .how-section {
+    width: 100%; max-width: 640px;
+    animation: fadeUp 0.8s 0.2s ease-out both;
+    position: relative; z-index: 1;
+  }
+  .how-section h3 {
+    font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700;
+    color: var(--muted); letter-spacing: 2px; text-align: center; margin-bottom: 20px;
+    text-transform: uppercase;
+  }
+  .steps { display: flex; gap: 16px; }
+  .step {
+    flex: 1; padding: 20px 16px; border-radius: 14px; text-align: center;
+    background: var(--glass); border: 1px solid var(--glass-border);
+  }
+  .step-icon { font-size: 28px; margin-bottom: 10px; }
+  .step-title { font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--text); }
+  .step-desc { font-size: 12px; color: var(--text2); line-height: 1.5; }
+
+  /* ── PROGRESS MODAL ───────────────────────────────────────────────────── */
+  #progress-overlay {
+    position: fixed; inset: 0; z-index: 500;
+    background: rgba(11,13,26,0.92); backdrop-filter: blur(12px);
+    display: none; align-items: center; justify-content: center;
+  }
+  #progress-overlay.show { display: flex; }
+  .progress-card {
+    width: 480px; padding: 40px 36px; border-radius: 20px; text-align: center;
+    background: rgba(15,17,40,0.95); border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-glass);
+  }
+  .progress-brain {
+    font-size: 56px; margin-bottom: 20px;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .progress-title {
+    font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800;
+    margin-bottom: 8px; color: var(--text);
+  }
+  #progress-stage {
+    font-size: 14px; color: var(--text2); margin-bottom: 24px;
+    min-height: 20px; transition: all 0.3s;
+  }
+  .progress-track {
+    width: 100%; height: 8px; background: rgba(255,255,255,0.08);
+    border-radius: 4px; overflow: hidden; margin-bottom: 16px;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 4px; transition: width 0.5s ease-out;
+    box-shadow: 0 0 12px rgba(129,140,248,0.5);
+  }
+  #progress-pct {
+    font-family: 'Space Mono', monospace; font-size: 13px;
+    color: var(--accent); font-weight: 700;
+  }
+  .agent-log {
+    margin-top: 20px; padding: 14px; border-radius: 10px;
+    background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06);
+    text-align: left; font-family: 'Space Mono', monospace; font-size: 11px;
+    color: var(--text2); min-height: 60px; max-height: 80px; overflow-y: auto;
+  }
+  .log-line { line-height: 1.7; }
+  .log-line.active { color: var(--accent); }
+
+  .divider { width: 100%; height: 1px; background: var(--glass-border); }
+</style>
+</head>
+<body class="dot-grid">
+
+<!-- NAV -->
+<nav>
+  <div class="logo">Lucidity<span>Graph</span></div>
+  <div class="spacer"></div>
+  <div class="nav-tag">Multi-Agent Knowledge System</div>
+</nav>
+
+<!-- MAIN -->
+<main class="hero">
+  <div class="hero-bg-orb orb-1"></div>
+  <div class="hero-bg-orb orb-2"></div>
+  <div class="hero-bg-orb orb-3"></div>
+
+  <!-- Header -->
+  <div class="hero-header">
+    <div style="margin-bottom:16px">
+      <span class="badge badge-indigo">🧠 AI-Powered</span>
+      &nbsp;
+      <span class="badge badge-sky">⚡ llama3.2</span>
+      &nbsp;
+      <span class="badge badge-green">🌐 Local & Private</span>
+    </div>
+    <h1>Turn any PDF into<br><span class="grad-text">a Neural Knowledge Graph</span></h1>
+    <p>Upload your lesson PDFs, give them a title, and our multi-agent AI builds an interactive neural graph you can learn from — one node at a time.</p>
+  </div>
+
+  <!-- Upload Card -->
+  <div class="glass-card upload-card">
+
+    <!-- Lesson Title -->
+    <div style="margin-bottom:24px">
+      <div class="field-label">1 — Lesson Title</div>
+      <input type="text" id="lesson-title" class="lesson-input"
+        placeholder="e.g. The World of Cars" maxlength="80">
+    </div>
+
+    <div class="divider" style="margin-bottom:24px"></div>
+
+    <!-- Drop Zone -->
+    <div style="margin-bottom:20px">
+      <div class="field-label">2 — Upload PDFs</div>
+      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <div class="drop-icon">📂</div>
+        <div class="drop-title">Drop your PDFs and images here</div>
+        <div class="drop-sub">or click to browse files</div>
+        <div class="drop-hint">PDF + image supported · All content merged</div>
+      </div>
+      <input type="file" id="file-input" accept=".pdf,image/*" multiple>
+    </div>
+
+    <!-- File List -->
+    <div id="file-list" style="margin-bottom:24px"></div>
+
+    <div class="divider" style="margin-bottom:24px"></div>
+
+    <!-- Generate Button -->
+    <div class="cta-area">
+      <button class="btn-primary" id="generate-btn" disabled onclick="generateGraph()">
+        <span>🚀 Generate Neural Graph</span>
+        <span class="btn-sub" id="btn-sub-text">Add files to begin</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- How it Works -->
+  <div class="how-section">
+    <h3>How the agents work</h3>
+    <div class="steps">
+      <div class="step">
+        <div class="step-icon">📄</div>
+        <div class="step-title">PDF Extractor</div>
+        <div class="step-desc">Reads every page with PyMuPDF</div>
+      </div>
+      <div class="step">
+        <div class="step-icon">🧠</div>
+        <div class="step-title">Structure Agent</div>
+        <div class="step-desc">LLM extracts chapters & sections</div>
+      </div>
+      <div class="step">
+        <div class="step-icon">📝</div>
+        <div class="step-title">Quiz Agent</div>
+        <div class="step-desc">MCQ per node for active recall</div>
+      </div>
+      <div class="step">
+        <div class="step-icon">🗺️</div>
+        <div class="step-title">Layout Agent</div>
+        <div class="step-desc">Computes neural graph positions</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- PROGRESS MODAL -->
+<div id="progress-overlay">
+  <div class="progress-card">
+    <div class="progress-brain">🧠</div>
+    <div class="progress-title">Agents at Work</div>
+    <div id="progress-stage">Initializing pipeline...</div>
+    <div class="progress-track">
+      <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+    <div id="progress-pct">0%</div>
+    <div class="agent-log" id="agent-log">
+      <div class="log-line active">[ Orchestrator ] Starting pipeline...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let selectedFiles = [];
+let pollInterval = null;
+
+/* ── File Handling ───────────────────────────────────────────────────────── */
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  addFiles([...e.dataTransfer.files]);
+});
+fileInput.addEventListener('change', () => addFiles([...fileInput.files]));
+
+function addFiles(files) {
+  const accepted = files.filter(f => {
+    const n = f.name.toLowerCase();
+    return n.endsWith('.pdf') || f.type.startsWith('image/');
+  });
+
+  accepted.forEach(f => {
+    if (!selectedFiles.find(x => x.name === f.name)) selectedFiles.push(f);
+  });
+  renderFileList();
+}
+
+function removeFile(name) {
+  selectedFiles = selectedFiles.filter(f => f.name !== name);
+  renderFileList();
+}
+
+function fmtBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  return (b / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function renderFileList() {
+  const list = document.getElementById('file-list');
+  const btn  = document.getElementById('generate-btn');
+  const sub  = document.getElementById('btn-sub-text');
+
+  if (selectedFiles.length === 0) {
+    list.innerHTML = '';
+    btn.disabled = true;
+    sub.textContent = 'Add files to begin';
+    return;
+  }
+
+  list.innerHTML = selectedFiles.map((f, i) => `
+    <div class="file-item">
+      <span class="file-icon">${f.type.startsWith('image/') ? '🖼️' : '📄'}</span>
+      <span class="file-name" title="${f.name}">${f.name}</span>
+      <span class="file-size">${fmtBytes(f.size)}</span>
+      <button class="file-remove" onclick="removeFile('${f.name}')" title="Remove">✕</button>
+    </div>
+  `).join('');
+
+  btn.disabled = false;
+  sub.textContent = `${selectedFiles.length} file${selectedFiles.length > 1 ? 's' : ''} ready`;
+}
+
+/* ── Generate ───────────────────────────────────────────────────────────── */
+async function generateGraph() {
+  const title = document.getElementById('lesson-title').value.trim();
+  if (!title) {
+    document.getElementById('lesson-title').focus();
+    document.getElementById('lesson-title').style.borderColor = 'var(--danger)';
+    return;
+  }
+  if (selectedFiles.length === 0) return;
+
+  // Build form data
+  const fd = new FormData();
+  fd.append('lesson_title', title);
+  selectedFiles.forEach(f => fd.append('pdfs', f));
+
+  // Show modal
+  document.getElementById('progress-overlay').classList.add('show');
+  updateProgress('⏳ Uploading files...', 5);
+
+  try {
+    const res = await fetch(`${API}/api/upload`, { method: 'POST', body: fd });
+    if (!res.ok) {
+      const e = await res.json();
+      throw new Error(e.error || 'Upload failed');
+    }
+    const { session_id } = await res.json();
+    startPolling(session_id);
+  } catch (err) {
+    alert('Error: ' + err.message);
+    document.getElementById('progress-overlay').classList.remove('show');
+  }
+}
+
+/* ── Polling ─────────────────────────────────────────────────────────────── */
+function startPolling(session_id) {
+  clearInterval(pollInterval);
+  pollInterval = setInterval(async () => {
+    try {
+      const res = await fetch(`${API}/api/status/${session_id}`);
+      const data = await res.json();
+
+      updateProgress(data.stage, data.percent);
+      addLog(data.stage);
+
+      if (data.status === 'done') {
+        clearInterval(pollInterval);
+        updateProgress('✅ Graph ready! Redirecting...', 100);
+        setTimeout(() => {
+          window.location.href = `graph.html?id=${session_id}`;
+        }, 800);
+      } else if (data.status === 'error') {
+        clearInterval(pollInterval);
+        alert('Agent error: ' + data.error);
+        document.getElementById('progress-overlay').classList.remove('show');
+      }
+    } catch (e) {
+      console.error('Poll error:', e);
+    }
+  }, 2000);
+}
+
+function updateProgress(stage, pct) {
+  document.getElementById('progress-stage').textContent = stage;
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent = pct + '%';
+}
+
+function addLog(line) {
+  const log = document.getElementById('agent-log');
+  // Remove active from previous
+  log.querySelectorAll('.log-line').forEach(el => el.classList.remove('active'));
+  const div = document.createElement('div');
+  div.className = 'log-line active';
+  div.textContent = '[ Agent ] ' + line;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+</script>
+</body>
+</html>

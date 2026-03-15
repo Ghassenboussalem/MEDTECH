@@ -1,23 +1,49 @@
+import useNotebookStore from '../store/useNotebookStore';
+
 /**
- * CitationChip — small pill showing [Source, p.N] with hover tooltip
+ * CitationChip — small numerical pill showing [1] with hover tooltip 
+ * and click handler to open the PDF viewer.
  */
-export default function CitationChip({ source, page, text }) {
-  const label = page ? `${source}, p.${page}` : source;
+export default function CitationChip({ metadata }) {
+  const setSelectedCitation = useNotebookStore((s) => s.setSelectedCitation);
+
+  if (!metadata) return null;
+
   return (
-    <span style={{ position: 'relative', display: 'inline-flex' }}>
-      <span
-        className="badge badge-accent"
+    <span style={{ position: 'relative', display: 'inline-flex', margin: '0 2px' }}>
+      <button
+        onClick={() => setSelectedCitation(metadata)}
+        className="badge badge-accent citation-badge"
         style={{
-          cursor: 'default',
+          cursor: 'pointer',
           fontSize: '11px',
-          fontFamily: 'var(--font-mono)',
-          borderRadius: 4,
+          fontWeight: 600,
+          fontFamily: 'var(--font-sans)',
+          borderRadius: '50%',
+          width: '18px',
+          height: '18px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 0,
+          border: '1px solid var(--accent)',
+          background: 'var(--accent-glow)',
+          color: 'var(--accent)',
           userSelect: 'none',
+          transition: 'all 0.2s ease',
         }}
-        title={text || label}
+        title={`Source: ${metadata.source}${metadata.page ? ` (Page ${metadata.page})` : ''}\n\n"${metadata.text}"`}
+        onMouseOver={(e) => {
+          e.currentTarget.style.background = 'var(--accent)';
+          e.currentTarget.style.color = '#fff';
+        }}
+        onMouseOut={(e) => {
+          e.currentTarget.style.background = 'var(--accent-glow)';
+          e.currentTarget.style.color = 'var(--accent)';
+        }}
       >
-        [{label}]
-      </span>
+        {metadata.id}
+      </button>
     </span>
   );
 }

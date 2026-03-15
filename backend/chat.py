@@ -5,6 +5,7 @@ chat.py — RAG pipeline: retrieve relevant chunks, then stream an answer from l
 `generate_artifact()` returns a single string for summaries / FAQ / study guides.
 """
 import asyncio
+import json
 from collections.abc import AsyncGenerator
 
 import ollama
@@ -18,21 +19,30 @@ SYSTEM_PROMPT = """You are a meticulous research assistant. You answer questions
 ONLY using the provided source excerpts below. Every claim you make must be backed \
 by one of the sources.
 
-When citing a source, use inline brackets like this: [SourceName, p.3]
+When citing a source, use ONLY the strict numeric format matching the provided Chunk IDs. \
+For example: [1] or [3]. Never use the filename or page number in the citation.
 
 If the answer cannot be found in the sources, say: \
 "I could not find information about this in your uploaded documents."
 
-Sources:
+Context:
 {context}"""
 
 
-def _build_context(chunks: list[dict]) -> str:
+def _build_context(chunks: list[dict]) -> tuple[str, list[dict]]:
+    """Returns the formatted prompt context and the metadata mapping."""
     parts = []
-    for c in chunks:
-        page_label = f", p.{c['page']}" if c.get("page") else ""
-        parts.append(f"[{c['source']}{page_label}]\n{c['text']}")
-    return "\n\n---\n\n".join(parts)
+    metadata = []
+    for i, c in enumerate(chunks, 1):
+        page_label = f" (Page {c['page']})" if c.get("page") else ""
+        parts.append(f"Chunk [{i}]:\nSource: {c['source']}{page_label}\n{c['text']}")
+        metadata.append({
+            "id": i,
+            "source": c["source"],
+            "page": c.get("page", 0),
+            "text": c["text"]
+        })
+    return "\n\n---\n\n".join(parts), metadata
 
 
 def _build_messages(history: list[dict], system: str, question: str) -> list[dict]:
@@ -67,11 +77,22 @@ async def rag_stream(
 
     # ── 2. RAG retrieval ──────────────────────────────────────────────────────
     chunks = vector_query(notebook_id, question, k=5)
-    context = _build_context(chunks) if chunks else "(No documents uploaded yet.)"
+    
+    if not chunks:
+        context = "(No documents uploaded yet.)"
+        metadata = []
+    else:
+        context, metadata = _build_context(chunks)
+        
     system = SYSTEM_PROMPT.format(context=context)
     messages = _build_messages(history, system, question)
 
-    # ── 3. Stream LLM response, accumulate for output guard ───────────────────
+    # ── 3. Stream Metadata, then LLM response ─────────────────────────────────
+    # Send the metadata block first so the frontend knows what [1] points to.
+    # Yield as a single string without newlines to preserve SSE in main.py
+    meta_json = json.dumps(metadata)
+    yield f"[METADATA]{meta_json}[/METADATA]"
+
     accumulated = []
     stream = ollama.chat(model=CHAT_MODEL, messages=messages, stream=True)
     for part in stream:
@@ -86,6 +107,44 @@ async def rag_stream(
     if out_guard.blocked:
         # We already streamed the harmful content — signal the frontend to replace it
         yield f"\n\n[GUARDRAIL:output_safety_guard] {out_guard.message}"
+
+
+async def generate_welcome(notebook_id: str) -> dict:
+    """Read a sample of the notebook's documents and generate a summary + 3 suggested questions."""
+    chunks = vector_query(notebook_id, "overview main topics introduction", k=5)
+    if not chunks:
+        return {"summary": "Upload some documents to get started!", "questions": []}
+    
+    context = "\n".join(c["text"] for c in chunks)
+    prompt = (
+        "You are an energetic AI study assistant. Read the following document excerpts and generate:\n"
+        "1. A proactive, encouraging 2-sentence summary of what the documents are about.\n"
+        "2. Directly below that, exactly 3 highly relevant suggested questions the user could ask.\n\n"
+        "Return ONLY a valid JSON object with the exact keys: 'summary' (string) and 'questions' (array of 3 strings).\n"
+        "No markup, no markdown fences, no other text.\n\n"
+        f"Excerpts:\n{context[:3000]}"
+    )
+
+    def _call():
+        return ollama.chat(
+            model=CHAT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            options={"temperature": 0.3}
+        )
+
+    resp = await asyncio.to_thread(_call)
+    text = resp["message"]["content"].strip()
+    
+    try:
+        if text.startswith("```json"): text = text[7:]
+        if text.endswith("```"): text = text[:-3]
+        return json.loads(text.strip())
+    except Exception:
+        return {
+            "summary": "I'm ready to help you study this material.",
+            "questions": ["Can you summarize this?", "What are the key concepts?", "Generate a quiz for me."]
+        }
 
 
 async def validate_node(

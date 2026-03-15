@@ -2,12 +2,18 @@
 main.py — FastAPI application: all REST endpoints for the NotebookLM clone.
 """
 import asyncio
+import base64
+import threading
+import uuid
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
+import os
+from pathlib import Path
 
 import notebooks as nb_store
 import ingest as ingester
@@ -18,6 +24,10 @@ import graph as kg_store
 import concept_extractor as extractor
 import socratic_engine as socratic
 from graph_storage import GraphStorage
+import ollama
+from agents.orchestrator import OrchestratorAgent
+from agents.tutor_agent import TutorAgent
+from agents.content_agent import ContentAgent
 
 app = FastAPI(title="NotebookLM Local Clone", version="1.0.0")
 
@@ -27,6 +37,260 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Ensure data dir exists
+DATA_DIR = Path(__file__).parent / "data" / "notebooks"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# Mount the entire notebooks data directory to serve uploaded files statically
+app.mount("/data/notebooks", StaticFiles(directory=str(DATA_DIR)), name="notebook_data")
+
+# Lucidity session data (copied flow from standalone Lucidity project)
+UPLOAD_FOLDER = Path(__file__).parent / "uploads"
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+
+sessions: dict = {}
+sessions_lock = threading.Lock()
+contexts: dict = {}
+contexts_lock = threading.Lock()
+notebook_lucidity_sessions: dict[str, str] = {}
+
+
+def _get_lucidity_session(session_id: str):
+    with sessions_lock:
+        return sessions.get(session_id)
+
+
+def _is_image_filename(name: str) -> bool:
+    ext = Path(name).suffix.lower()
+    return ext in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+
+
+def _describe_image_with_llava(image_bytes: bytes, filename: str) -> str:
+    """Generate a study-oriented description from an image using llava:latest."""
+    b64_image = base64.b64encode(image_bytes).decode("utf-8")
+    prompt = (
+        "Describe this image for a study knowledge graph. "
+        "Focus on concrete objects, concepts, labels, numbers, and relationships. "
+        "Return one concise paragraph followed by 3-5 bullet points of key facts."
+    )
+    response = ollama.chat(
+        model="llava:latest",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [b64_image],
+            }
+        ],
+        stream=False,
+        options={"temperature": 0.2, "num_predict": 512},
+    )
+    return response["message"]["content"].strip()
+
+
+# ── Lucidity API ─────────────────────────────────────────────────────────────
+
+@app.post("/api/upload")
+async def lucidity_upload(
+    lesson_title: str = Form("My Lesson"),
+    pdfs: list[UploadFile] = File(...),
+):
+    lesson_title = lesson_title.strip() or "My Lesson"
+
+    if not pdfs or all((f.filename or "").strip() == "" for f in pdfs):
+        raise HTTPException(400, "No PDF files were provided.")
+
+    session_id = str(uuid.uuid4())
+    session_dir = UPLOAD_FOLDER / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    file_paths: list[str] = []
+    file_names: list[str] = []
+    extra_docs: list[dict] = []
+
+    for f in pdfs:
+        filename = (f.filename or "").strip()
+        safe_name = os.path.basename(filename)
+        dest = session_dir / safe_name
+        content = await f.read()
+        dest.write_bytes(content)
+
+        if filename.lower().endswith(".pdf"):
+            file_paths.append(str(dest))
+            file_names.append(safe_name)
+            continue
+
+        if _is_image_filename(filename):
+            try:
+                description = await asyncio.to_thread(_describe_image_with_llava, content, safe_name)
+            except Exception as exc:
+                description = f"Image analysis failed for {safe_name}: {exc}"
+
+            extra_docs.append(
+                {
+                    "filename": safe_name,
+                    "text": description,
+                    "page_count": 1,
+                }
+            )
+            file_names.append(safe_name)
+
+    if not file_paths and not extra_docs:
+        raise HTTPException(
+            400,
+            "No valid files found. Upload PDF files and/or images (png, jpg, jpeg, webp, bmp, gif).",
+        )
+
+    with sessions_lock:
+        sessions[session_id] = {
+            "status": "queued",
+            "stage": "⏳ Queued...",
+            "percent": 0,
+            "graph": None,
+            "error": None,
+            "lesson_title": lesson_title,
+            "files": file_names,
+        }
+
+    def _run_pipeline():
+        agent = OrchestratorAgent(sessions, sessions_lock, contexts, contexts_lock)
+        agent.run(file_paths, file_names, lesson_title, session_id, extra_docs=extra_docs)
+
+    threading.Thread(target=_run_pipeline, daemon=True).start()
+    return {"session_id": session_id, "files": file_names}
+
+
+@app.get("/api/status/{session_id}")
+def lucidity_status(session_id: str):
+    session = _get_lucidity_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found.")
+    return {
+        "status": session["status"],
+        "stage": session["stage"],
+        "percent": session["percent"],
+        "error": session.get("error"),
+    }
+
+
+@app.get("/api/graph/{session_id}")
+def lucidity_graph(session_id: str):
+    session = _get_lucidity_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found.")
+    if session["status"] == "error":
+        raise HTTPException(500, session.get("error", "Pipeline failed."))
+    if session["status"] != "done":
+        return JSONResponse(
+            status_code=202,
+            content={"error": "Graph not ready yet.", "status": session["status"]},
+        )
+    return session["graph"]
+
+
+class LucidityNodeContentRequest(BaseModel):
+    session_id: str = ""
+    node_title: str
+    node_summary: str = ""
+
+
+@app.post("/api/node-content")
+def lucidity_node_content(body: LucidityNodeContentRequest):
+    with contexts_lock:
+        context = contexts.get(body.session_id, "")
+
+    content = ContentAgent().generate(body.node_title, body.node_summary, context)
+    return {"content": content}
+
+
+class LucidityChatRequest(BaseModel):
+    mode: str = "feynman"
+    node_title: str = "this concept"
+    node_summary: str = ""
+    message: str
+    history: list[dict] = []
+
+
+@app.post("/api/chat")
+def lucidity_chat(body: LucidityChatRequest):
+    user_message = body.message.strip()
+    if not user_message:
+        raise HTTPException(400, "message is required")
+
+    reply = TutorAgent().chat(
+        mode=body.mode,
+        node_title=body.node_title,
+        node_summary=body.node_summary,
+        user_message=user_message,
+        history=body.history,
+    )
+    return {"response": reply}
+
+
+@app.get("/api/health")
+def lucidity_health():
+    return {"status": "ok", "model": "llama3.2:latest"}
+
+
+@app.post("/api/from-notebook/{notebook_id}")
+def lucidity_from_notebook(notebook_id: str):
+    """Create or reuse a Lucidity session using already uploaded notebook PDFs."""
+    nb = nb_store.get_notebook(notebook_id)
+    if not nb:
+        raise HTTPException(404, "Notebook not found")
+
+    # Reuse an active/completed Lucidity session for this notebook when possible.
+    with sessions_lock:
+        existing_session_id = notebook_lucidity_sessions.get(notebook_id)
+        existing_session = sessions.get(existing_session_id) if existing_session_id else None
+        if existing_session and existing_session.get("status") in {"queued", "running", "done"}:
+            return {
+                "session_id": existing_session_id,
+                "status": existing_session.get("status"),
+                "reused": True,
+            }
+
+    source_dir = DATA_DIR / notebook_id / "sources"
+    if not source_dir.exists():
+        raise HTTPException(400, "No uploaded sources found for this notebook.")
+
+    pdf_files = sorted([p for p in source_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"])
+    if not pdf_files:
+        raise HTTPException(
+            400,
+            "This notebook has no PDF sources. Upload PDF files in Sources first.",
+        )
+
+    lesson_title = nb.get("name", "My Lesson")
+    file_paths = [str(p) for p in pdf_files]
+    file_names = [p.name for p in pdf_files]
+    session_id = str(uuid.uuid4())
+
+    with sessions_lock:
+        sessions[session_id] = {
+            "status": "queued",
+            "stage": "⏳ Queued...",
+            "percent": 0,
+            "graph": None,
+            "error": None,
+            "lesson_title": lesson_title,
+            "files": file_names,
+        }
+        notebook_lucidity_sessions[notebook_id] = session_id
+
+    def _run_pipeline():
+        agent = OrchestratorAgent(sessions, sessions_lock, contexts, contexts_lock)
+        agent.run(file_paths, file_names, lesson_title, session_id)
+
+    threading.Thread(target=_run_pipeline, daemon=True).start()
+
+    return {
+        "session_id": session_id,
+        "status": "queued",
+        "reused": False,
+        "files": file_names,
+    }
 
 # ── Notebooks ────────────────────────────────────────────────────────────────
 
@@ -77,9 +341,19 @@ async def upload_source(notebook_id: str, file: UploadFile = File(...)):
         raise HTTPException(404, "Notebook not found")
 
     file_bytes = await file.read()
+
+    # Save the file to disk so the frontend can display it in the citation viewer
+    nb_dir = DATA_DIR / notebook_id / "sources"
+    nb_dir.mkdir(parents=True, exist_ok=True)
+    file_path = nb_dir / file.filename
+    file_path.write_bytes(file_bytes)
+
     chunks = ingester.ingest_file(file_bytes, file.filename)
 
     if not chunks:
+        # If extraction completely fails, clean up the saved file
+        if file_path.exists():
+            file_path.unlink()
         raise HTTPException(422, "Could not extract text from the uploaded file.")
 
     # Run embedding in a thread to avoid blocking the event loop
@@ -133,6 +407,22 @@ async def chat(notebook_id: str, body: ChatRequest):
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/notebooks/{notebook_id}/welcome")
+async def get_welcome_message(notebook_id: str):
+    """Generate a proactive summary and 3 suggested questions for an empty chat."""
+    nb = nb_store.get_notebook(notebook_id)
+    if not nb:
+        raise HTTPException(404, "Notebook not found")
+    
+    # Check if there are sources before generating a welcome
+    sources = nb.get("sources", [])
+    if not sources:
+        return {"summary": "Upload some documents to get started!", "questions": []}
+
+    result = await rag.generate_welcome(notebook_id)
+    return result
 
 
 # ── Artifact Generation ───────────────────────────────────────────────────────
@@ -198,6 +488,11 @@ async def build_graph(notebook_id: str):
         raise HTTPException(422, "No sources uploaded yet — upload documents first.")
 
     concepts_json, course_json = await extractor.run_pipeline(notebook_id, context)
+
+    if not concepts_json.get("essential_concepts"):
+        error_msg = concepts_json.get("_parse_error", "Failed to extract concepts from sources.")
+        raise HTTPException(500, f"Graph generation failed: The AI could not extract valid concepts. Parse error: {error_msg}")
+
     graph = kg_store.get_graph(notebook_id)
     graph.build_graph(concepts_json, course_json)  # GraphBuilder API
 
@@ -329,6 +624,104 @@ def next_concept(notebook_id: str):
     concept = graph.get_concept(cid)
     mode = graph.get_recommended_mode(cid)
     return {"concept_id": cid, "concept": concept, "recommended_mode": mode}
+
+
+class NodeQuizRequest(BaseModel):
+    concept_id: str
+
+
+@app.post("/notebooks/{notebook_id}/node-quiz")
+async def generate_node_quiz(notebook_id: str, body: NodeQuizRequest):
+    """Generate 3 MCQ questions for a specific concept node."""
+    nb = nb_store.get_notebook(notebook_id)
+    if not nb:
+        raise HTTPException(404, "Notebook not found")
+
+    graph = kg_store.get_graph(notebook_id)
+    concept = graph.get_concept(body.concept_id)
+    if not concept:
+        raise HTTPException(404, f"Concept '{body.concept_id}' not found in graph.")
+
+    # Fetch relevant context from RAG
+    from embeddings import query as vec_query
+    chunks = vec_query(notebook_id, concept.get("name", ""), k=4)
+    context = "\n\n".join(c["text"] for c in chunks) if chunks else concept.get("description", "")
+
+    concept_name = concept.get("name", body.concept_id)
+    concept_desc = concept.get("description", "")
+
+    prompt = (
+        "You are an educational assessment expert.\n"
+        f"Create exactly 3 multiple-choice questions to test understanding of:\n"
+        f"Concept: {concept_name}\n"
+        f"Description: {concept_desc}\n\n"
+        f"Context from the course material:\n{context[:1500]}\n\n"
+        "Return ONLY valid JSON in this exact format:\n"
+        '{"questions":['
+        '{"q":"Question text?","options":["Option A","Option B","Option C","Option D"],"answer_index":0,"explanation":"Why this is correct."},'
+        '{"q":"Question 2?","options":["A","B","C","D"],"answer_index":2,"explanation":"Reason."},'
+        '{"q":"Question 3?","options":["A","B","C","D"],"answer_index":1,"explanation":"Reason."}'
+        "]}\n\n"
+        "Rules:\n"
+        "- answer_index is 0-based (0=A, 1=B, 2=C, 3=D)\n"
+        "- Make distractors plausible but clearly wrong to an expert\n"
+        "- Questions must be specific to the concept above\n"
+        "- NO markdown, NO extra text, ONLY the JSON object"
+    )
+
+    import ollama
+    import json
+    import re
+
+    def _call():
+        return ollama.chat(
+            model="llama3.2:latest",
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            format="json",
+            options={"num_predict": 2048, "temperature": 0.2},
+        )
+
+    try:
+        resp = await asyncio.to_thread(_call)
+        raw = resp["message"]["content"]
+
+        # Clean and parse
+        clean = re.sub(r"```json\n?|\n?```", "", raw).strip()
+        clean = re.sub(r",\s*([\]}])", r"\1", clean)
+        data = json.loads(clean)
+        questions = data.get("questions", [])
+
+        # Validate structure
+        valid_qs = []
+        for q in questions:
+            if (isinstance(q, dict) and q.get("q") and
+                    isinstance(q.get("options"), list) and len(q["options"]) >= 2 and
+                    isinstance(q.get("answer_index"), int)):
+                valid_qs.append(q)
+
+        if not valid_qs:
+            # Fallback: generate a simple free-text question
+            raise ValueError("No valid questions parsed")
+
+        return {"concept_id": body.concept_id, "concept_name": concept_name, "questions": valid_qs[:3]}
+
+    except Exception as e:
+        # Fallback hard-coded questions from concept data
+        fallback = [
+            {
+                "q": f"Which of the following best describes '{concept_name}'?",
+                "options": [
+                    concept_desc[:80] if concept_desc else "Correct definition",
+                    "An unrelated process",
+                    "The opposite concept",
+                    "A method, not a concept",
+                ],
+                "answer_index": 0,
+                "explanation": f"{concept_name}: {concept_desc}",
+            }
+        ]
+        return {"concept_id": body.concept_id, "concept_name": concept_name, "questions": fallback}
 
 
 @app.post("/notebooks/{notebook_id}/start-session")
