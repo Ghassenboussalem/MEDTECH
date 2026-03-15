@@ -1,6 +1,6 @@
-# MEDTECH - Local NotebookLM + Lucidity Graph
+# EDUGRAPH
 
-A fully local, privacy-first AI learning assistant inspired by NotebookLM.
+A fully local, privacy-first AI learning assistant .
 Everything runs on your machine with Ollama models. No cloud API is required.
 
 ## Core Features
