@@ -13,6 +13,8 @@ import fitz  # PyMuPDF
 import ollama
 from docx import Document
 
+VISION_MODEL = "llava-phi3:3.8b"  # <= 5B parameters
+
 CHUNK_SIZE = 400       # characters per chunk (≈ 120-150 tokens)
 CHUNK_OVERLAP = 60     # overlap to preserve context across chunk boundaries
 
@@ -60,7 +62,7 @@ def parse_image(file_bytes: bytes, source_name: str) -> list[dict]:
         "Return one concise paragraph then 3-6 bullet points."
     )
     resp = ollama.chat(
-        model="llava:latest",
+        model=VISION_MODEL,
         messages=[
             {
                 "role": "user",
@@ -99,7 +101,7 @@ def parse_url(url: str) -> list[dict]:
         import httpx
         r = httpx.get(
             url, timeout=15, follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; NotebookLM-Local/1.0)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; EduGraph/1.0)"},
         )
         r.raise_for_status()
     except Exception as e:

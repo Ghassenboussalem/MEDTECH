@@ -16,7 +16,7 @@ const useNotebookStore = create((set, get) => ({
     set({ loading: true, error: null });
     try {
       const res = await fetch(`${API}/notebooks`);
-      if (!res.ok) throw new Error('Failed to load notebooks');
+      if (!res.ok) throw new Error('Failed to load lessons');
       const data = await res.json();
       set({ notebooks: data, loading: false });
     } catch (e) {
@@ -30,7 +30,7 @@ const useNotebookStore = create((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     });
-    if (!res.ok) throw new Error('Failed to create notebook');
+    if (!res.ok) throw new Error('Failed to create lesson');
     const nb = await res.json();
     set((s) => ({ notebooks: [...s.notebooks, nb] }));
     return nb;
@@ -38,7 +38,7 @@ const useNotebookStore = create((set, get) => ({
 
   deleteNotebook: async (id) => {
     const res = await fetch(`${API}/notebooks/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete notebook');
+    if (!res.ok) throw new Error('Failed to delete lesson');
     set((s) => ({ notebooks: s.notebooks.filter((n) => n.id !== id) }));
   },
 
@@ -47,7 +47,7 @@ const useNotebookStore = create((set, get) => ({
     set({ loading: true, error: null, current: null });
     try {
       const res = await fetch(`${API}/notebooks/${id}`);
-      if (!res.ok) throw new Error('Notebook not found');
+      if (!res.ok) throw new Error('Lesson not found');
       const data = await res.json();
       set({ current: data, loading: false });
     } catch (e) {

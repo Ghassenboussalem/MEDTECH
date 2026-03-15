@@ -23,7 +23,7 @@ export default function LucidityGraph({ notebookId, initialSessionId = '' }) {
 
     async function bootstrap() {
       if (!notebookId) {
-        setError('Notebook ID is missing.');
+        setError('Lesson ID is missing.');
         setLoading(false);
         return;
       }
@@ -70,7 +70,7 @@ export default function LucidityGraph({ notebookId, initialSessionId = '' }) {
         color: 'var(--text-muted)',
         fontSize: 14,
       }}>
-        Preparing Lucidity graph from notebook sources...
+        Preparing Lucidity graph from lesson sources...
       </div>
     );
   }

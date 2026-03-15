@@ -25,7 +25,7 @@ export default function NotebookDetail() {
   if (error) return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
       <p style={{ color: 'var(--danger)' }}>{error}</p>
-      <button className="btn btn-ghost" onClick={() => navigate('/')}>← Back to notebooks</button>
+      <button className="btn btn-ghost" onClick={() => navigate('/')}>← Back to lessons</button>
     </div>
   );
 

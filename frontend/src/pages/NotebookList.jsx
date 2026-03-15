@@ -23,7 +23,7 @@ function NewNotebookModal({ onClose, onCreate }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 style={{ fontSize: '1.2rem', marginBottom: 20 }}>New Notebook</h2>
+        <h2 style={{ fontSize: '1.2rem', marginBottom: 20 }}>New Lesson</h2>
         <form onSubmit={submit}>
           <input
             id="notebook-name-input"
@@ -98,7 +98,7 @@ export default function NotebookList() {
             </svg>
           </div>
           <div>
-            <h1 style={{ fontSize: '1.1rem', fontWeight: 700, lineHeight: 1 }}>NotebookLM Local</h1>
+            <h1 style={{ fontSize: '1.1rem', fontWeight: 700, lineHeight: 1 }}>EduGraph</h1>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: 2 }}>Powered by llama3.2 · 100% local</p>
           </div>
         </div>
@@ -106,7 +106,7 @@ export default function NotebookList() {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
           </svg>
-          New Notebook
+          New Lesson
         </button>
       </header>
 
@@ -125,9 +125,9 @@ export default function NotebookList() {
             border: '1px dashed var(--border)', borderRadius: 'var(--radius-xl)',
           }}>
             <div style={{ fontSize: '2.4rem', marginBottom: 12 }}>📚</div>
-            <h2 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: 8 }}>No notebooks yet</h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: 24 }}>Create a notebook to start chatting with your documents</p>
-            <button className="btn btn-primary" onClick={() => setShowNew(true)}>Create your first notebook</button>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: 8 }}>No lessons yet</h2>
+            <p style={{ color: 'var(--text-muted)', marginBottom: 24 }}>Create a lesson to start chatting with your documents</p>
+            <button className="btn btn-primary" onClick={() => setShowNew(true)}>Create your first lesson</button>
           </div>
         )}
 
@@ -186,7 +186,7 @@ export default function NotebookList() {
       {showNew && <NewNotebookModal onClose={() => setShowNew(false)} onCreate={handleCreate} />}
       {confirmId && (
         <ConfirmModal
-          message="Delete this notebook? All sources and vectors will be permanently removed."
+          message="Delete this lesson? All sources and vectors will be permanently removed."
           onConfirm={handleDelete}
           onClose={() => setConfirmId(null)}
         />

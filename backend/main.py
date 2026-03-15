@@ -1,5 +1,5 @@
 """
-main.py — FastAPI application: all REST endpoints for the NotebookLM clone.
+main.py - FastAPI application: all REST endpoints for EduGraph.
 """
 import asyncio
 import base64
@@ -34,7 +34,7 @@ from agents.content_agent import ContentAgent
 
 VISION_MODEL = "llava-phi3:3.8b"  # <= 5B parameters
 
-app = FastAPI(title="NotebookLM Local Clone", version="1.0.0")
+app = FastAPI(title="EduGraph", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -104,7 +104,7 @@ def _clear_notebook_graph_cache(notebook_id: str) -> None:
 
 
 def _invalidate_notebook_lucidity_state(notebook_id: str) -> None:
-    """Reset active Lucidity state when notebook sources are updated."""
+    """Reset active Lucidity state when lesson sources are updated."""
     with sessions_lock:
         notebook_lucidity_sessions.pop(notebook_id, None)
     _clear_notebook_graph_cache(notebook_id)
@@ -143,7 +143,7 @@ def _describe_image_with_llava(image_bytes: bytes, filename: str) -> str:
     return response["message"]["content"].strip()
 
 
-# ── Lucidity API ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @app.post("/api/upload")
 async def lucidity_upload(
@@ -199,7 +199,7 @@ async def lucidity_upload(
     with sessions_lock:
         sessions[session_id] = {
             "status": "queued",
-            "stage": "⏳ Queued...",
+            "stage": "Queued...",
             "percent": 0,
             "graph": None,
             "error": None,
@@ -388,10 +388,10 @@ def lucidity_health():
 
 @app.post("/api/from-notebook/{notebook_id}")
 def lucidity_from_notebook(notebook_id: str):
-    """Create or reuse a Lucidity session using already uploaded notebook sources."""
+    """Create or reuse a Lucidity session using already uploaded lesson sources."""
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
 
     # Reuse an active/completed Lucidity session for this notebook when possible.
     with sessions_lock:
@@ -406,7 +406,7 @@ def lucidity_from_notebook(notebook_id: str):
 
     source_dir = DATA_DIR / notebook_id / "sources"
     if not source_dir.exists():
-        raise HTTPException(400, "No uploaded sources found for this notebook.")
+        raise HTTPException(400, "No uploaded sources found for this lesson.")
 
     source_files = sorted([p for p in source_dir.iterdir() if p.is_file()])
     pdf_files = [p for p in source_files if p.suffix.lower() == ".pdf"]
@@ -415,7 +415,7 @@ def lucidity_from_notebook(notebook_id: str):
     if not pdf_files and not image_files:
         raise HTTPException(
             400,
-            "This notebook has no supported sources. Upload PDF and/or image files in Sources first.",
+            "This lesson has no supported sources. Upload PDF and/or image files in Sources first.",
         )
 
     sources_snapshot = _build_sources_snapshot(source_files)
@@ -429,7 +429,7 @@ def lucidity_from_notebook(notebook_id: str):
         with sessions_lock:
             sessions[cached_session_id] = {
                 "status": "done",
-                "stage": "✅ Graph ready!",
+                "stage": "Graph ready!",
                 "percent": 100,
                 "graph": cached["graph"],
                 "error": None,
@@ -473,7 +473,7 @@ def lucidity_from_notebook(notebook_id: str):
     with sessions_lock:
         sessions[session_id] = {
             "status": "queued",
-            "stage": "⏳ Queued...",
+            "stage": "Queued...",
             "percent": 0,
             "graph": None,
             "error": None,
@@ -515,7 +515,7 @@ def lucidity_from_notebook(notebook_id: str):
         "files": file_names,
     }
 
-# ── Notebooks ────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class NotebookCreate(BaseModel):
     name: str
@@ -535,7 +535,7 @@ def create_notebook(body: NotebookCreate):
 def get_notebook(notebook_id: str):
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
     return nb
 
 
@@ -543,17 +543,17 @@ def get_notebook(notebook_id: str):
 def delete_notebook(notebook_id: str):
     deleted = nb_store.delete_notebook(notebook_id)
     if not deleted:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
     vec_store.delete_collection(notebook_id)
 
 
-# ── Sources ──────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @app.get("/notebooks/{notebook_id}/sources")
 def list_sources(notebook_id: str):
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
     return nb.get("sources", [])
 
 
@@ -561,7 +561,7 @@ def list_sources(notebook_id: str):
 async def upload_source(notebook_id: str, file: UploadFile = File(...)):
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
 
     file_bytes = await file.read()
 
@@ -595,7 +595,7 @@ class UrlUpload(BaseModel):
 async def upload_url(notebook_id: str, body: UrlUpload):
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
 
     try:
         chunks = await asyncio.to_thread(ingester.parse_url, body.url)
@@ -612,7 +612,7 @@ async def upload_url(notebook_id: str, body: UrlUpload):
     return {"url": body.url, "source_name": source_name, "chunks_indexed": len(chunks)}
 
 
-# ── Chat ─────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ChatRequest(BaseModel):
     question: str
@@ -623,7 +623,7 @@ class ChatRequest(BaseModel):
 async def chat(notebook_id: str, body: ChatRequest):
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
 
     async def event_stream():
         async for token in rag.rag_stream(notebook_id, body.question, body.history):
@@ -639,7 +639,7 @@ async def get_welcome_message(notebook_id: str):
     """Generate a proactive summary and 3 suggested questions for an empty chat."""
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
     
     # Check if there are sources before generating a welcome
     sources = nb.get("sources", [])
@@ -650,7 +650,7 @@ async def get_welcome_message(notebook_id: str):
     return result
 
 
-# ── Artifact Generation ───────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 ArtifactType = Literal["summary", "faq", "study_guide", "quiz", "mind_map", "learning_graph"]
 
@@ -659,13 +659,13 @@ ArtifactType = Literal["summary", "faq", "study_guide", "quiz", "mind_map", "lea
 async def generate_artifact(notebook_id: str, artifact_type: ArtifactType):
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
 
     result = await rag.generate_artifact(notebook_id, artifact_type)
     return {"type": artifact_type, "content": result}
 
 
-# ── Node Validation ─────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 class ValidateQuestion(BaseModel):
     q: str
@@ -684,7 +684,7 @@ class ValidateNodeRequest(BaseModel):
 async def validate_node_endpoint(notebook_id: str, body: ValidateNodeRequest):
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
 
     qs = [q.model_dump() for q in body.questions]
     results = await validate_node(
@@ -696,21 +696,21 @@ async def validate_node_endpoint(notebook_id: str, body: ValidateNodeRequest):
     return {"node_id": body.node_id, "results": results, "passed": passed}
 
 
-# ── Knowledge Graph (MAÏEUTICA) ─────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 @app.post("/notebooks/{notebook_id}/build-graph")
 async def build_graph(notebook_id: str):
     """Extract concepts from uploaded sources and build the knowledge graph."""
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
 
     # Pull all text from the vector store
     from embeddings import query as vec_query
     chunks = vec_query(notebook_id, "overview introduction main concepts", k=20)
     context = "\n\n".join(c["text"] for c in chunks) if chunks else ""
     if not context:
-        raise HTTPException(422, "No sources uploaded yet — upload documents first.")
+        raise HTTPException(422, "No sources uploaded yet - upload documents first.")
 
     concepts_json, course_json = await extractor.run_pipeline(notebook_id, context)
 
@@ -735,7 +735,7 @@ def get_graph(notebook_id: str):
     """Return the current knowledge graph state."""
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
     graph = kg_store.get_graph(notebook_id)
     return graph.get_state()
 
@@ -749,7 +749,7 @@ async def export_graph(notebook_id: str, body: ExportGraphRequest):
     """Optional: persist the knowledge graph to Neo4j or Memgraph."""
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
     graph = kg_store.get_graph(notebook_id)
     storage = GraphStorage(storage_type=body.storage_type)
     result = await asyncio.to_thread(storage.save_graph, graph, notebook_id)
@@ -768,10 +768,10 @@ class SocraticChatRequest(BaseModel):
 
 @app.post("/notebooks/{notebook_id}/socratic-chat")
 async def socratic_chat(notebook_id: str, body: SocraticChatRequest):
-    """Streaming Socratic AI response — never gives direct answers."""
+    """Streaming Socratic AI response - never gives direct answers."""
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
 
     graph = kg_store.get_graph(notebook_id)
     concept = graph.get_concept(body.concept_id)
@@ -810,7 +810,7 @@ async def score_response_endpoint(notebook_id: str, body: ScoreRequest):
     """Score a student summary response, update the knowledge graph node."""
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
 
     graph = kg_store.get_graph(notebook_id)
     concept = graph.get_concept(body.concept_id)
@@ -841,7 +841,7 @@ def next_concept(notebook_id: str):
     """Return the next recommended concept_id for the student."""
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
     graph = kg_store.get_graph(notebook_id)
     cid = graph.get_next_concept()
     if not cid:
@@ -860,7 +860,7 @@ async def generate_node_quiz(notebook_id: str, body: NodeQuizRequest):
     """Generate 3 MCQ questions for a specific concept node."""
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
 
     graph = kg_store.get_graph(notebook_id)
     concept = graph.get_concept(body.concept_id)
@@ -953,7 +953,7 @@ async def generate_node_quiz(notebook_id: str, body: NodeQuizRequest):
 def start_session(notebook_id: str):
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
     graph = kg_store.get_graph(notebook_id)
     return {"session_id": graph.start_session()}
 
@@ -962,13 +962,14 @@ def start_session(notebook_id: str):
 def end_session(notebook_id: str, session_id: str):
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
-        raise HTTPException(404, "Notebook not found")
+        raise HTTPException(404, "Lesson not found")
     graph = kg_store.get_graph(notebook_id)
     return graph.end_session(session_id)
 
 
-# ── Dev entry point ───────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
