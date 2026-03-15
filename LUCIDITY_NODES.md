@@ -1,67 +1,137 @@
-# Lucidity Graph Generation & Node Architecture
+# Lucidity Nodes: Structure, Reinforcement, and Multi-Method Tutoring
 
-This document explains how the **MAÏEUTICA Knowledge Graph** (frontend name: Lucidity Graph) is dynamically generated from raw texts and how its nodes, layers, and states are structured.
+This document explains how Lucidity nodes are built, unlocked, assessed, and reinforced.
 
----
+## 1. Node Generation Model
 
-## 🧠 1. The Generation Workflow (Backend Pass)
+Lucidity graph nodes are generated from notebook sources using a multi-agent pipeline:
 
-The graph generation relies on a **Two-Pass LLM Pipeline** orchestrated by `concept_extractor.py`. When a user clicks "Build Knowledge Graph," the backend fetches all vector embeddings for that notebook and passes them to the local `llama3.2` model.
+- Structure extraction agent
+- Quiz generation agent
+- Graph layout agent
+- Content/tutor agents for remediation
 
-### Pass 1: Concept Extraction (`extract_concepts`)
-The LLM is prompted to act as an "expert educational content analyst." It reads the document context and extracts the core concepts into a rigid JSON structure:
-- **`concept_id`**: A unique snake_case identifier.
-- **`name`** & **`description`**: Human-readable title and summary.
-- **`importance`**: `critique` (must master), `importante` (should master), `utile` (nice to know).
-- **`bloom_level`**: The *target* cognitive level for this concept (e.g., `understand`, `apply`, `analyze`).
-- **`concept_hierarchy`**: The LLM automatically bins each extracted concept into one of three layers:
-  - `fundamental`: Concepts requiring no prior knowledge.
-  - `intermediate`: Concepts requiring fundamental knowledge.
-  - `advanced`: Concepts requiring intermediate knowledge.
+## 1.1 Multi-Agent Architecture
 
-### Pass 2: Course Structural Design (`extract_course_structure`)
-The LLM is then prompted as a "curriculum designer." It takes the raw text + the list of concepts extracted in Pass 1 to build a cohesive learning path:
-- Groups concepts into logical **Modules**.
-- Determines **Learning Outcomes**.
-- Defines teaching and assessment strategies (e.g., Feynman technique, worked examples).
+Lucidity uses a cooperative multi-agent design where each agent has a strict responsibility.
 
-### Graph Building (`graph.py`)
-Once the JSON is extracted, the `GraphBuilder` class (using the `NetworkX` library) constructs a Directed Graph (`DiGraph`):
-1. **Node Creation**: Every concept becomes a node (initialized with `0.0` confidence, `UNKNOWN` status, and `is_locked = True` for non-fundamentals).
-2. **Edge Creation**: Hard-coded prerequisite edges (`PREREQUISITE_OF`) are drawn between the hierarchy layers: `fundamental` → `intermediate` → `advanced`.
-3. **Misconception Seeding**: Socratic "Misconception" nodes are pre-attached to concepts based on common misunderstandings identified by the LLM in Pass 1.
-4. **Unlocking**: The graph runs `_propagate_unlocks()` to unlock the `fundamental` root nodes so the student can start learning.
+Agents and responsibilities:
 
----
+- `PDFExtractorAgent`
+  - Extracts raw text from PDF sources.
+  - Produces normalized source documents `{filename, text, page_count}`.
 
-## 🕸️ 2. Frontend Visualization (Lucidity Graph)
+- `StructureAgent`
+  - Builds the conceptual tree (chapters, sections, subsections).
+  - Produces semantic summaries used by downstream quiz/content generation.
 
-The `LucidityGraph.jsx` component uses `react-force-graph-2d` to render the data payload from the backend. The layers defined in Pass 1 dictate the physical layout of the graph on the canvas.
+- `QuizAgent`
+  - Generates 3 node-specific MCQs for every node.
+  - Enforces quality constraints (non-generic stems, plausible distractors, node grounding).
 
-### Layered Architecture (DAG Layout)
-The graph uses a Directed Acyclic Graph (DAG) layout engine (`dagMode="td"` for Top-Down).
-- **Layer 0 (Top)**: `fundamental` concepts.
-- **Layer 1 (Middle)**: `intermediate` concepts.
-- **Layer 2 (Bottom)**: `advanced` concepts.
+- `GraphLayoutAgent`
+  - Converts the conceptual tree into renderable Lucidity nodes with coordinates and edges.
+  - Applies initial unlock policy (root + first chapter unlocked).
 
-Because the backend explicitly created `PREREQUISITE_OF` edges cascading down these layers, the physics engine naturally organizes the nodes hierarchically without overlapping clusters.
+- `ContentAgent`
+  - Generates rich on-demand explanatory content when the learner opens a node.
+  - Structures explanations to support remediation and review.
 
----
+- `TutorAgent`
+  - Runs interactive tutoring in one of 3 methods (`feynman`, `socratic`, `devil`).
+  - Used after failed quiz outcomes to reinforce understanding.
 
-## 🚦 3. Node State & Bloom's Taxonomy Mastery
+- `OrchestratorAgent`
+  - Coordinates the full pipeline and updates progress state.
+  - Handles asynchronous session lifecycle and final graph payload publishing.
 
-Nodes in the MAÏEUTICA graph are stateful. As the student converses with the Socratic AI, the backend scores their responses and updates the node's state.
+Control flow (simplified):
 
-### Node Status Flow
-A node's visual color and icon change based on its `status`:
-1. 🔒 **LOCKED** (Gray): Prerequisites have not been mastered yet.
-2. ❓ **UNKNOWN** (Light Blue): Fully unlocked, ready to be learned, but unattempted.
-3. 👣 **VISITED** (Blue): Attempted, but score is low (< 55%).
-4. ⚠️ **CONFUSED** (Orange/Red): Score is very low (< 30%). The node is flagged for review, and a `HAS_MISCONCEPTION` edge may be dynamically generated.
-5. 🧠 **UNDERSTOOD** (Purple): Score > 55%. Prerequisites for child nodes are unlocked.
-6. 👑 **MASTERED** (Gold): Score > 85% + Target Bloom's Level achieved.
+1. Sources are collected (text docs + optional image descriptions).
+2. `OrchestratorAgent` triggers extraction and structure synthesis.
+3. `QuizAgent` enriches each node with assessments.
+4. `GraphLayoutAgent` builds final node/edge graph JSON.
+5. Frontend polls session status and loads graph when ready.
+6. During learning, `ContentAgent` and `TutorAgent` run on-demand per node.
 
-### Dynamic Edge Generation
-While `PREREQUISITE_OF` edges are static (created at generation), the graph also supports dynamic cognitive edges:
-- `CONFUSED_WITH`: If the AI detects the student mixing up two concepts during chat, the backend draws a link between them.
-- `HAS_MISCONCEPTION`: Links a concept to a tracked misunderstanding that must be resolved (usually triggering the "Devil's Advocate" AI mode).
+This separation improves scalability and maintainability:
+
+- Each agent can evolve independently.
+- Failures are isolated to a specific stage.
+- New agent capabilities can be inserted without rewriting the whole pipeline.
+
+Node payload typically includes:
+
+- `id`
+- `type` (`root`, `chapter`, `section`, `sub`)
+- `summary`
+- `quiz` (3 MCQs)
+- `connections`
+- `unlocked`
+- `mastered`
+
+## 2. Unlock Policy
+
+Default unlock behavior:
+
+- Root node is unlocked.
+- First chapter node is also unlocked by default to ensure immediate progression.
+- Other nodes unlock through progression after mastering prerequisites.
+
+Reset behavior:
+
+- Root remains unlocked.
+- First chapter remains unlocked.
+- Other nodes return to locked state.
+
+## 3. Quiz Quality Policy
+
+Quiz generation enforces node specificity:
+
+- Exactly 3 questions per node.
+- Questions target different cognitive intents:
+  - factual
+  - mechanism/relationship
+  - application/diagnosis
+- Generic stems are rejected.
+- Distractors must be plausible, not joke/random options.
+- Validation checks that question/choices are grounded in node title/summary keywords.
+
+## 4. Multi-Method Tutoring
+
+When learners fail quiz questions, Lucidity uses three pedagogical methods:
+
+- `feynman`: simplify and rebuild understanding
+- `socratic`: guided questioning
+- `devil`: challenge misconceptions and force justification
+
+These methods are not static; they are selected adaptively.
+
+## 5. Reinforcement Mechanism
+
+Lucidity uses a lightweight online reinforcement strategy (bandit-style) per `(session_id, node_id)`:
+
+- Method selection endpoint chooses next tutor mode.
+- Feedback endpoint updates method rewards.
+- Reward examples:
+  - `1.0` when learner succeeds after tutoring
+  - `0.0` when learner still fails after intervention
+
+This drives personalization while staying computationally cheap and scalable.
+
+## 6. Session Endpoints (Lucidity)
+
+Key endpoints used by Lucidity frontend:
+
+- `POST /api/from-notebook/{notebook_id}`
+- `GET /api/status/{session_id}`
+- `GET /api/graph/{session_id}`
+- `POST /api/chat`
+- `POST /api/node-content`
+- `POST /api/tutor-method/select`
+- `POST /api/tutor-method/feedback`
+
+## 7. Image-Aware Learning Context
+
+Notebook images uploaded in Sources are described via `llava:latest` and added to learning context.
+This helps nodes and quizzes align with visual material (diagrams, charts, slides, screenshots).

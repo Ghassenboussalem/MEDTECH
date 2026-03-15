@@ -295,6 +295,46 @@ let chatHistory = [];
 let currentQuizIndex = 0;
 let consecutiveFails = 0;
 
+async function chooseTutorMethod() {
+  try {
+    if (!SESSION_ID || !selectedNode?.id) throw new Error('missing session/node');
+    const res = await fetch(`${API}/api/tutor-method/select`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: SESSION_ID,
+        node_id: selectedNode.id,
+        fail_count: consecutiveFails,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok && data?.method) return data.method;
+  } catch (_) {}
+
+  // Deterministic fallback if selector unavailable
+  if (consecutiveFails === 1) return 'feynman';
+  if (consecutiveFails === 2) return 'socratic';
+  return 'devil';
+}
+
+async function sendTutorFeedback(reward) {
+  try {
+    if (!SESSION_ID || !selectedNode?.id || !currentTutor) return;
+    await fetch(`${API}/api/tutor-method/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: SESSION_ID,
+        node_id: selectedNode.id,
+        method: currentTutor,
+        reward,
+      }),
+    });
+  } catch (_) {
+    // non-blocking analytics update
+  }
+}
+
 // ── Load Graph from API ───────────────────────────────────────────────────
 async function loadGraph() {
   const params = new URLSearchParams(window.location.search);
@@ -709,7 +749,7 @@ function resetToMCQ() {
   document.getElementById('quiz-success-view').style.display = 'none';
 }
 
-function scoreMCQ() {
+async function scoreMCQ() {
   const selected = document.querySelector('input[name="mcq"]:checked');
   if (!selected) { alert('Please select an answer.'); return; }
 
@@ -717,6 +757,10 @@ function scoreMCQ() {
   if (!Array.isArray(quizzes)) { quizzes = [quizzes]; }
 
   if (selected.dataset.correct === 'true') {
+    if (currentTutor) {
+      await sendTutorFeedback(1.0);
+      currentTutor = null;
+    }
     consecutiveFails = 0;
     currentQuizIndex++;
     if (currentQuizIndex >= quizzes.length) {
@@ -730,13 +774,14 @@ function scoreMCQ() {
       resetToMCQ();
     }
   } else {
+    if (currentTutor) {
+      await sendTutorFeedback(0.0);
+    }
     consecutiveFails++;
     document.getElementById('quiz-mcq-view').style.display = 'none';
-    
-    // Auto-progress to different tutors
-    if (consecutiveFails === 1) startChat('feynman');
-    else if (consecutiveFails === 2) startChat('socratic');
-    else startChat('devil');
+
+    const method = await chooseTutorMethod();
+    startChat(method);
   }
 }
 
@@ -838,7 +883,11 @@ function updateBadges() {
 }
 
 function resetGraph() {
-  NODES.forEach(n => { n.unlocked = (n.id === 'root'); n.mastered = false; });
+  const firstChapter = NODES.find(n => n.type === 'chapter');
+  NODES.forEach(n => {
+    n.unlocked = (n.id === 'root') || (firstChapter && n.id === firstChapter.id);
+    n.mastered = false;
+  });
   selectedNode = null;
   document.getElementById('empty-state').style.display = 'flex';
   document.getElementById('node-detail').classList.add('hidden');

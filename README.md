@@ -1,39 +1,55 @@
-# NotebookLM Local Clone 🤖📚
+# MEDTECH - Local NotebookLM + Lucidity Graph
 
-A fully **local, privacy-first** AI research assistant — a self-hosted clone of Google NotebookLM powered by **llama3.2** via Ollama. No cloud APIs, no data leaving your machine.
+A fully local, privacy-first AI learning assistant inspired by NotebookLM.
+Everything runs on your machine with Ollama models. No cloud API is required.
 
-## Features
+## Core Features
 
-- 📄 Upload PDFs, DOCX, TXT/MD documents, or **paste website URLs**
-- 💬 Chat with an AI grounded **exclusively** in your uploaded sources
-- 📎 Inline **[source citations]** in every answer
-- ✨ Generate **Summary**, **FAQ**, **Study Guide**, **Quiz**, and **Mind Map** from your documents
-- 🗂️ Multiple isolated notebooks
-- 🌙 Beautiful dark UI with streaming responses
+- Upload lesson sources: PDF, DOCX, TXT/MD, URL, and image files.
+- Ask grounded questions over your notebook sources.
+- Streamed chat responses with source references.
+- Generate artifacts: Summary, Study Guide, Mind Map (plus additional internal artifact types).
+- Lucidity Graph learning flow with node quizzes and adaptive tutoring.
+
+## Lucidity Highlights
+
+- Lucidity starts from notebook sources (no separate re-upload required in normal flow).
+- First chapter node is always unlocked for a clean starting point.
+- Quiz flow uses node-specific MCQs and non-generic validation rules.
+- If a learner fails, tutoring method is selected adaptively from 3 modes:
+  - Feynman
+  - Socratic
+  - Devil's Advocate
+- Method selection uses a lightweight online reinforcement policy (bandit-style) per session/node.
+
+## Models Used
+
+- `llama3.2:latest` - generation/chat/quiz/content
+- `nomic-embed-text` - embeddings for retrieval
+- `llava:latest` - image-to-text description for image sources
 
 ## Tech Stack
 
-| Layer | Tech |
-|---|---|
-| LLM | Ollama + llama3.2:latest |
-| Embeddings | nomic-embed-text (via Ollama) |
-| Vector store | ChromaDB |
-| Backend | FastAPI + Python |
-| Frontend | Vite + React + Zustand |
+- Backend: FastAPI, Python
+- Frontend: React + Vite + Zustand
+- Vector store: ChromaDB
+- Graph: NetworkX + custom Lucidity rendering
 
 ## Prerequisites
 
-1. **Install [Ollama](https://ollama.com)** and pull the required models:
-   ```bash
-   ollama pull llama3.2:latest
-   ollama pull nomic-embed-text
-   ```
+1. Install Ollama and pull models:
 
-2. **Python 3.11+** and **Node.js 18+**
+```bash
+ollama pull llama3.2:latest
+ollama pull nomic-embed-text
+ollama pull llava:latest
+```
 
-## Quick Start
+2. Install Python 3.11+ and Node.js 18+.
 
-### 1. Backend
+## Run Locally
+
+### Backend
 
 ```bash
 cd backend
@@ -41,7 +57,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-### 2. Frontend (new terminal)
+### Frontend
 
 ```bash
 cd frontend
@@ -49,38 +65,40 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:5173** in your browser.
+Open: `http://localhost:5173`
 
-> [!IMPORTANT]
-> Make sure `ollama serve` is running before starting the backend.
+## Main Endpoints (selected)
 
-## Project Structure
+- `POST /notebooks/{id}/upload` - upload notebook source file
+- `POST /notebooks/{id}/chat` - RAG chat streaming
+- `POST /notebooks/{id}/generate/{artifact_type}` - artifact generation
+- `POST /api/from-notebook/{notebook_id}` - bootstrap Lucidity session from notebook sources
+- `GET /api/status/{session_id}` - Lucidity build progress
+- `GET /api/graph/{session_id}` - Lucidity graph payload
+- `POST /api/tutor-method/select` - adaptive tutor method selection
+- `POST /api/tutor-method/feedback` - reinforcement feedback update
 
-```
+## Project Layout
+
+```text
 medtech/
-├── backend/
-│   ├── main.py          # FastAPI REST API
-│   ├── notebooks.py     # Notebook CRUD (JSON file)
-│   ├── ingest.py        # Document parsing & chunking
-│   ├── embeddings.py    # ChromaDB + nomic-embed-text
-│   ├── chat.py          # RAG pipeline + streaming
-│   └── requirements.txt
-├── frontend/
-│   └── src/
-│       ├── pages/       # NotebookList, NotebookDetail
-│       ├── components/  # ChatPanel, SourcePanel, UploadZone, CitationChip, GeneratePanel
-│       └── store/       # Zustand store
-└── data/                # Auto-created: notebooks.json + ChromaDB files
+  backend/
+    main.py
+    ingest.py
+    embeddings.py
+    chat.py
+    guardrails.py
+    agents/
+  frontend/
+    src/
+      components/
+      pages/
+      store/
+    public/lucidity/
+  data/
 ```
 
-## API Endpoints
+## Notes
 
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/notebooks` | List all notebooks |
-| POST | `/notebooks` | Create notebook |
-| DELETE | `/notebooks/{id}` | Delete notebook |
-| POST | `/notebooks/{id}/upload` | Upload & index document |
-| GET | `/notebooks/{id}/sources` | List sources |
-| POST | `/notebooks/{id}/chat` | SSE streaming RAG chat |
-| POST | `/notebooks/{id}/generate/{type}` | Generate summary/faq/study_guide |
+- The app is designed for local/private operation.
+- If frontend/backend fail to start, verify Ollama is running and models are available.

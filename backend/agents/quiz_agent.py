@@ -1,57 +1,67 @@
-"""
-Quiz Agent — v2
----------------
-Generates a 4-option MCQ for each node.
-Key improvements:
-- Correct answer is ALWAYS at options[0] in the data
-- Frontend shuffles before display so the user never knows which position is correct
-- Prompt explicitly instructs LLM to derive the correct answer from the summary
-- Includes the full summary as context so facts are accurate
+"""Quiz Agent
+-------------
+Generates realistic, node-specific 3-question MCQ sets for each concept.
 """
 import json
 import re
+from collections import Counter
 import requests
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "llama3.2:latest"
 
 QUIZ_PROMPT = """\
-You are a quiz writer. Create EXACTLY 3 multiple-choice questions to test understanding of the following concept. The questions should progressively get harder or cover different aspects.
+You are an expert assessment designer for technical education.
 
-CONCEPT: "{title}"
+Create EXACTLY 3 high-quality multiple-choice questions for this node.
+The 3 questions must target different cognitive levels:
+1) factual understanding,
+2) mechanism/relationship understanding,
+3) application or diagnosis.
 
-SUMMARY (read carefully — the correct answers must come from this):
+NODE TITLE: "{title}"
+
+NODE SUMMARY (all correct answers must be grounded in this content):
 ---
 {summary}
 ---
 
-Output ONLY this JSON format — no markdown, no explanation, nothing else:
+Return ONLY valid JSON in this exact schema:
 {{
-  "quizzes": [
-    {{
-      "question": "A specific question about the concept above?",
-      "options": ["The correct answer (a fact from the summary)", "A wrong option", "Another wrong option", "Another wrong option"],
-      "correct": 0
-    }},
-    {{
-      "question": "A different specific question about the concept?",
-      "options": ["The correct answer", "Wrong", "Wrong", "Wrong"],
-      "correct": 0
-    }},
-    {{
-      "question": "A third specific question about the concept?",
-      "options": ["The correct answer", "Wrong", "Wrong", "Wrong"],
-      "correct": 0
-    }}
-  ]
+    "quizzes": [
+        {{
+            "question": "Specific, concrete question about the node content?",
+            "options": ["Correct answer", "Plausible distractor", "Plausible distractor", "Plausible distractor"],
+            "correct": 0
+        }},
+        {{"question": "...", "options": ["...", "...", "...", "..."], "correct": 0}},
+        {{"question": "...", "options": ["...", "...", "...", "..."], "correct": 0}}
+    ]
 }}
 
-RULES:
-- You MUST output exactly 3 distinct questions.
-- For EVERY question, options[0] is ALWAYS the correct answer — it MUST be directly supported by the summary.
-- The 3 wrong options for each question must be plausible but clearly wrong.
-- Keep all options under 12 words.
-- Output raw JSON only."""
+STRICT RULES:
+- Exactly 3 questions.
+- options[0] MUST be correct for each question.
+- Questions must reference concrete node details (terms, properties, constraints, numbers, examples).
+- Avoid generic stems such as "What is the primary focus...".
+- Distractors must be realistic and domain-plausible, not joke answers.
+- Keep each option concise (<= 14 words).
+- Output ONLY raw JSON.
+"""
+
+STOPWORDS = {
+        "the", "and", "for", "that", "with", "this", "from", "are", "was", "were", "into",
+        "have", "has", "had", "about", "what", "when", "where", "which", "their", "there",
+        "your", "you", "will", "can", "could", "should", "would", "than", "then", "they",
+        "them", "these", "those", "using", "used", "also", "such", "only", "over", "under",
+}
+
+
+def _keywords(text: str, limit: int = 12) -> list[str]:
+        tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9\-]{2,}", text.lower())
+        filtered = [t for t in tokens if t not in STOPWORDS]
+        ranked = [w for w, _ in Counter(filtered).most_common(limit)]
+        return ranked
 
 
 def _call_ollama(prompt: str, timeout: int = 60) -> str:
@@ -86,35 +96,71 @@ def _extract_json(text: str):
     return None
 
 
-def _validate_quiz(q: dict) -> bool:
+def _validate_quiz(q: dict, title: str, summary_keywords: list[str]) -> bool:
+    if not isinstance(q, dict):
+        return False
+    question = q.get("question") or q.get("q")
+    options = q.get("options")
+    if not isinstance(question, str) or len(question.strip()) < 14:
+        return False
+    if not isinstance(options, list) or len(options) < 4:
+        return False
+    if not isinstance(q.get("correct", 0), int):
+        return False
+
+    generic_phrases = [
+        "primary focus",
+        "which of the following is true",
+        "another key point",
+    ]
+    ql = question.lower()
+    if any(g in ql for g in generic_phrases):
+        return False
+
+    # Ensure node-specific grounding: title token or summary keyword appears in question/options.
+    node_tokens = [t for t in re.findall(r"[a-zA-Z0-9\-]+", title.lower()) if len(t) > 2]
+    corpus = " ".join([question] + [str(o) for o in options]).lower()
+    has_title = any(t in corpus for t in node_tokens)
+    has_kw = any(k in corpus for k in summary_keywords[:8]) if summary_keywords else False
+
     return (
-        isinstance(q.get("question"), str) and len(q["question"]) > 10
-        and isinstance(q.get("options"), list) and len(q["options"]) >= 4
-        and q.get("correct") == 0  # We always expect correct at index 0
+        has_title or has_kw
     )
 
 
 def _default_quiz(title: str, summary: str) -> list:
-    """Fallback 3 MCQs that are at least somewhat sensible from available text."""
-    sentences = [s.strip() for s in re.split(r'[.!?]', summary) if len(s.strip()) > 20]
-    ans1 = sentences[0][:80] if len(sentences) > 0 else f"A core aspect of {title}"
-    ans2 = sentences[1][:80] if len(sentences) > 1 else f"Another detail about {title}"
-    ans3 = sentences[2][:80] if len(sentences) > 2 else f"A final point about {title}"
-    
+    """Fallback 3 node-grounded MCQs based on summary sentences."""
+    sentences = [s.strip() for s in re.split(r"[.!?]", summary) if len(s.strip()) > 24]
+    if not sentences:
+        sentences = [
+            f"{title} is explained in this lesson as a concrete concept with operational details",
+            f"{title} has relationships, constraints, and practical implications",
+            f"{title} can be applied to analyze realistic cases",
+        ]
+
+    ans1 = sentences[0][:110]
+    ans2 = sentences[1][:110] if len(sentences) > 1 else sentences[0][:110]
+    ans3 = sentences[2][:110] if len(sentences) > 2 else sentences[-1][:110]
+
+    kws = _keywords(summary)
+    d1 = kws[0] if kws else "an unrelated factor"
+    d2 = kws[1] if len(kws) > 1 else "a contradictory mechanism"
+    d3 = kws[2] if len(kws) > 2 else "an unsupported assumption"
+
     return [
         {
-            "question": f"What is the primary focus of '{title}'?",
-            "options": [ans1, "An unrelated historical event", "A mathematical equation", "A geographic location"],
+            "question": f"Which statement best matches the lesson's explanation of {title}?",
+            "options": [ans1, f"It is mainly defined by {d1} alone", f"It excludes {d2} entirely", f"It is unrelated to {d3}"],
             "correct": 0,
         },
         {
-            "question": f"Which of the following is true about '{title}'?",
-            "options": [ans2, "It does not apply here", "It is an outdated theory", "Nobody knows"],
+            "question": f"According to the node content, which mechanism of {title} is accurate?",
+            "options": [ans2, "It works without any constraints", "It is purely random and structure-free", "It has no practical implications"],
             "correct": 0,
         },
         {
-            "question": f"What is another key point regarding '{title}'?",
-            "options": [ans3, "It was discovered by aliens", "It is only relevant in space", "It is a myth"],
+            "question": f"In a realistic application, which use of {title} aligns with the lesson?",
+            "options": [ans3, "Use it without checking assumptions", "Apply it where evidence is absent", "Treat it as universally optimal"],
             "correct": 0,
         }
     ]
@@ -136,7 +182,9 @@ class QuizAgent:
         # Use summary if rich, otherwise supplement with context
         summary = node_summary.strip()
         if len(summary) < 40 and context:
-            summary = context[:500]
+            summary = context[:1200]
+
+        summary_keywords = _keywords(summary)
 
         prompt = QUIZ_PROMPT.format(title=node_title, summary=summary)
 
@@ -156,15 +204,18 @@ class QuizAgent:
                     for q in quizzes:
                         if not isinstance(q, dict):
                             continue
+                        if "q" in q and "question" not in q:
+                            q["question"] = q["q"]
+
                         # Normalize — sometimes LLM doesn't put correct at 0
                         correct_idx = q.get("correct", 0)
                         options = q.get("options", [])
                         if isinstance(options, list) and len(options) >= 4:
                             if correct_idx != 0 and 0 <= correct_idx < len(options):
                                 options[0], options[correct_idx] = options[correct_idx], options[0]
-                            q["options"] = options[:4]
+                            q["options"] = [str(o).strip()[:120] for o in options[:4]]
                             q["correct"] = 0
-                            if isinstance(q.get("question"), str) and len(q["question"]) > 5:
+                            if _validate_quiz(q, node_title, summary_keywords):
                                 valid_quizzes.append(q)
                     
                     if len(valid_quizzes) > 0:

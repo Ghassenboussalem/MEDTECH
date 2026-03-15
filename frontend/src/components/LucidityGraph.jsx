@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 
-export default function LucidityGraph({ notebookId }) {
-  const [loading, setLoading] = useState(true);
+export default function LucidityGraph({ notebookId, initialSessionId = '' }) {
+  const [loading, setLoading] = useState(!initialSessionId);
   const [error, setError] = useState('');
-  const [sessionId, setSessionId] = useState('');
+  const [sessionId, setSessionId] = useState(initialSessionId);
 
   const graphSrc = useMemo(() => {
     if (!sessionId) return '';
@@ -11,11 +11,24 @@ export default function LucidityGraph({ notebookId }) {
   }, [sessionId]);
 
   useEffect(() => {
+    if (initialSessionId) {
+      setSessionId(initialSessionId);
+      setLoading(false);
+      setError('');
+    }
+  }, [initialSessionId]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function bootstrap() {
       if (!notebookId) {
         setError('Notebook ID is missing.');
+        setLoading(false);
+        return;
+      }
+
+      if (sessionId) {
         setLoading(false);
         return;
       }
@@ -44,7 +57,7 @@ export default function LucidityGraph({ notebookId }) {
 
     bootstrap();
     return () => { cancelled = true; };
-  }, [notebookId]);
+  }, [notebookId, sessionId]);
 
   if (loading) {
     return (

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import useNotebookStore from '../store/useNotebookStore';
 import LearningGraphView from './LearningGraphView';
@@ -14,6 +14,8 @@ const TYPES = [
   { id: 'learning_graph', label: 'Learning Graph',   icon: '🧩', desc: 'AI-validated graph-based lesson journey' },
   { id: 'lucidity_graph', label: 'Lucidity Graph',   icon: '🧠', desc: 'Socratic AI co-pilot — never gives answers', special: true },
 ];
+
+const STARTER_TYPES = ['summary', 'study_guide', 'mind_map'];
 
 /* ─── Interactive Quiz ───────────────────────────────────────────── */
 function QuizView({ raw }) {
@@ -327,10 +329,18 @@ export default function GeneratePanel({ notebookId }) {
 
   // Cache: { summary: '...', faq: '...', study_guide: '...', quiz: '...' }
   const cache = useRef({});
-  const [active, setActive] = useState(null);       // currently selected tab
+  const [active, setActive] = useState('summary');
   const [loading, setLoading] = useState(null);
   const [error, setError]   = useState(null);
   const [tick, setTick]     = useState(0);          // force re-render when cache updates
+  const [luciditySessionId, setLuciditySessionId] = useState('');
+  const [lucidityStatus, setLucidityStatus] = useState('starting');
+  const [lucidityError, setLucidityError] = useState('');
+
+  const visibleTypes = useMemo(
+    () => TYPES.filter((t) => STARTER_TYPES.includes(t.id)),
+    []
+  );
 
   const generate = async (type, force = false) => {
     setActive(type);
@@ -357,6 +367,84 @@ export default function GeneratePanel({ notebookId }) {
   const current = active ? cache.current[active] : null;
   const isLoading = loading === active;
 
+  useEffect(() => {
+    let cancelled = false;
+    let pollTimer = null;
+
+    async function bootstrapLucidity() {
+      if (!notebookId) return;
+
+      setLucidityStatus('starting');
+      setLucidityError('');
+
+      try {
+        const res = await fetch(`/api/from-notebook/${notebookId}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.detail || 'Failed to initialize Lucidity session.');
+        if (cancelled) return;
+
+        setLuciditySessionId(data.session_id || '');
+        setLucidityStatus(data.status || 'queued');
+
+        if ((data.status || 'queued') === 'done') return;
+
+        pollTimer = setInterval(async () => {
+          try {
+            const sr = await fetch(`/api/status/${data.session_id}`);
+            const sd = await sr.json();
+            if (cancelled) return;
+            setLucidityStatus(sd.status || 'running');
+            if (sd.status === 'done' || sd.status === 'error') {
+              clearInterval(pollTimer);
+              pollTimer = null;
+              if (sd.status === 'error') {
+                setLucidityError(sd.error || 'Lucidity background preparation failed.');
+              }
+            }
+          } catch {
+            if (!cancelled) {
+              setLucidityStatus('running');
+            }
+          }
+        }, 2500);
+      } catch (e) {
+        if (cancelled) return;
+        setLucidityStatus('error');
+        setLucidityError(e.message || 'Failed to initialize Lucidity session.');
+      }
+    }
+
+    bootstrapLucidity();
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [notebookId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function warmSummary() {
+      if (!notebookId || cache.current.summary) return;
+      setLoading('summary');
+      setError(null);
+      try {
+        const data = await generateArtifact(notebookId, 'summary');
+        if (cancelled) return;
+        cache.current.summary = data.content;
+        setTick((t) => t + 1);
+      } catch (e) {
+        if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) setLoading(null);
+      }
+    }
+
+    warmSummary();
+    return () => { cancelled = true; };
+  }, [notebookId, generateArtifact]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* ── Tab bar ──────────────────────────────────────────────── */}
@@ -364,9 +452,9 @@ export default function GeneratePanel({ notebookId }) {
         padding: '0 24px',
         borderBottom: '1px solid var(--border)',
         background: 'var(--bg-surface)',
-        display: 'flex', gap: 0, flexShrink: 0,
+        display: 'flex', gap: 0, flexShrink: 0, alignItems: 'center',
       }}>
-        {TYPES.map((t) => {
+        {visibleTypes.map((t) => {
           const isCached = !!cache.current[t.id];
           const isActive = active === t.id;
           return (
@@ -400,13 +488,32 @@ export default function GeneratePanel({ notebookId }) {
             </button>
           );
         })}
+
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {lucidityStatus !== 'done' && lucidityStatus !== 'error' && (
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              Preparing Lucidity in background...
+            </span>
+          )}
+          {lucidityError && (
+            <span style={{ fontSize: 12, color: 'var(--danger)' }}>{lucidityError}</span>
+          )}
+          <button
+            className="btn btn-primary"
+            style={{ fontSize: 12, padding: '6px 12px' }}
+            onClick={() => setActive('lucidity_graph')}
+            disabled={lucidityStatus === 'error'}
+          >
+            All set
+          </button>
+        </div>
       </div>
 
       {/* ── Content area ─────────────────────────────────────────── */}
       <div className="overflow-y-auto" style={{ flex: 1, padding: active === 'lucidity_graph' ? 0 : '20px 24px', overflow: active === 'lucidity_graph' ? 'hidden' : undefined, display: 'flex', flexDirection: 'column' }}>
         {/* ── Lucidity Graph (self-contained, full height) ── */}
         {active === 'lucidity_graph' && (
-          <LucidityGraph notebookId={notebookId} />
+          <LucidityGraph notebookId={notebookId} initialSessionId={luciditySessionId} />
         )}
 
         {active !== 'lucidity_graph' && !active && (
@@ -418,7 +525,7 @@ export default function GeneratePanel({ notebookId }) {
             <div style={{ fontSize: '2.5rem' }}>✨</div>
             <p style={{ fontWeight: 500 }}>Pick a generation type above</p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, maxWidth: 380 }}>
-              {TYPES.map((t) => (
+              {visibleTypes.map((t) => (
                 <button key={t.id} onClick={() => generate(t.id)}
                   className="card" style={{ padding: '14px 16px', textAlign: 'left', cursor: 'pointer' }}>
                   <div style={{ fontSize: '1.4rem', marginBottom: 6 }}>{t.icon}</div>

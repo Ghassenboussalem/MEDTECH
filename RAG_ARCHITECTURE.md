@@ -1,78 +1,81 @@
-# RAG Architecture & Data Flow
+# RAG Architecture and Guardrails
 
-This document details the Retrieval-Augmented Generation (RAG) pipeline implemented in the backend of this project (NotebookLM Clone / MAÏEUTICA). The pipeline is fully local and privacy-first, leveraging Ollama and ChromaDB.
+This document describes the local Retrieval-Augmented Generation (RAG) pipeline and safety controls.
 
----
+## System Layers
 
-## 🏗️ High-Level Architecture
+1. Ingestion and normalization (`ingest.py`)
+2. Embedding and vector storage (`embeddings.py` + ChromaDB)
+3. Retrieval and generation (`chat.py`, artifact generation)
+4. Guardrails and policy checks (`guardrails.py`)
 
-The RAG pipeline is divided into three distinct layers:
-1. **Ingestion & Chunking** (`ingest.py`)
-2. **Embedding & Storage** (`embeddings.py`)
-3. **Retrieval & Generation** (`chat.py` / `socratic_engine.py`)
+## High-Level Flow
 
 ```mermaid
 graph TD;
-    A[Raw Document / URL] -->|PyMuPDF, BeautifulSoup| B(Ingestion Engine);
-    B -->|Text Chunks| C(Embedding Model: nomic-embed-text);
-    C -->|Vectors| D[(ChromaDB)];
-    
-    E[User Query] --> C;
-    C -->|Vector Similarity Search| D;
-    D -->|Top-K Chunks| F(LLM Prompt Assembly);
-    F -->|System Prompt Context| G(Generation Model: llama3.2);
-    G -->|Streaming Output| H[User Interface Response];
+    A[Source Files / URLs / Images] --> B[Ingestion and Chunking];
+    B --> C[nomic-embed-text Embeddings];
+    C --> D[(ChromaDB per notebook)];
+
+    E[User Query] --> F[Input Guardrails];
+    F --> G[Vector Retrieval Top-K];
+    G --> H[Prompt Assembly with Retrieved Context];
+    H --> I[llama3.2 Generation];
+    I --> J[Output Guardrails];
+    J --> K[Streaming Response to UI];
 ```
 
----
+## Ingestion Details
 
-## 1. Ingestion & Chunking (`ingest.py`)
+- Supported source types:
+  - PDF
+  - DOCX
+  - TXT/MD
+  - URL
+  - Images (described with `llava:latest` before indexing)
+- Chunking uses overlap to preserve context continuity across chunk boundaries.
+- Each chunk keeps source metadata used for references and UI traceability.
 
-The ingestion layer handles parsing knowledge from various formats and splitting it into digestible pieces.
+## Retrieval
 
-- **Supported Formats**: 
-  - PDFs (via `PyMuPDF` / `fitz`) - Extracts text while preserving page numbers.
-  - Microsoft Word `.docx` (via `python-docx`).
-  - Plain Text (`.txt`, `.md`).
-  - Web URLs (via `httpx` and `BeautifulSoup` to strip boilerplate HTML like nav/footers).
-- **Chunking Strategy**: 
-  - **Chunk Size**: 400 characters (roughly 120-150 tokens).
-  - **Overlap**: 60 characters. Overlaps are critical to prevent thought patterns or sentences from being improperly truncated across chunks, preserving contextual continuity for the LLM.
-- **Metadata**: Every chunk maintains its source name and, if applicable (like PDFs), its source page number.
+- Retrieval is notebook-isolated (separate vector collection per notebook).
+- Query embedding uses `nomic-embed-text`.
+- Top-K chunks are selected for grounding generation and artifact creation.
 
----
+## Generation
 
-## 2. Embedding & Vector Storage (`embeddings.py`)
+- Main generation model: `llama3.2:latest`.
+- Chat is streamed to UI.
+- Artifact generation (summary, study guide, mind map, etc.) uses broad retrieval context.
 
-To enable semantic search, chunks are converted into mathematical vectors and stored in a vector database.
+## Guardrails (Quadrils / Guardrails)
 
-- **Embedding Model**: `nomic-embed-text` (running locally via Ollama). This model is highly efficient for generating semantic representations of text chunks.
-- **Vector Database**: **ChromaDB** running in persistent, local mode (`data/chroma`). No cloud vector database is required.
-- **Collection Strategy**: A separate ChromaDB collection is created per notebook (e.g., `nb_{notebook_id}`). This logically isolates contexts preventing cross-contamination between different notebooks.
-- **Distance Metric**: `Cosine Similarity` (`hnsw:space: cosine`). This is standard for measuring the semantic angle between text vectors.
+Guardrails are enforced in two stages.
 
----
+### Input Guardrails
 
-## 3. Retrieval & Generation 
+- Off-topic detection
+- Prompt injection / role hijack patterns
+- Harmful intent filters
 
-Once user queries arrive, the system retrieves relevant chunks to ground the LLM's response.
+If blocked, request is rejected before LLM generation.
 
-### 3a. Standard RAG Chat (`chat.py`)
-- **Retrieval**: Converts the user's question into an embedding via `nomic-embed-text` and retrieves the **top-5** (`k=5`) most semantically similar chunks from the notebook's Chroma collection.
-- **Prompt Engineering**: 
-  - A strict system prompt is used: *"You answer questions ONLY using the provided source excerpts below. Every claim you make must be backed by one of the sources."*
-  - **Citations**: The LLM is explicitly instructed to cite sources inline (e.g., `[SourceName, p.3]`).
-- **Generation Model**: `llama3.2:latest` via Ollama. 
-- **Delivery**: The output from the LLM is streamed back to the frontend using Server-Sent Events (SSE).
+### Output Guardrails
 
-### 3b. Socratic Engine / MAÏEUTICA (`socratic_engine.py`)
-In the MAÏEUTICA Knowledge Graph system, the RAG approach is slightly modified to enforce active learning:
-- **Retrieval**: Pulls broad context (`k=15` chunks) regarding the specific concept the student is focused on.
-- **Prompt Engineering Constraints**: Driven dynamically by Bloom's Taxonomy. The LLM is given the RAG context to formulate the "correct" information internally, but is strictly constrained computationally **never to provide the direct answer**. Instead, it looks at the RAG context and formulates a Socratic question, a Feynman simplification prompt, or a Devil's Advocate flaw for the student to engage with.
+- Harmful content checks
+- Unsafe instruction checks
+- Optional redaction or refusal
 
----
+If output violates policy, response is blocked or replaced by safe fallback text.
 
-## 🛠️ Artifact Generation
+## Lucidity-Specific Data Path
 
-The same RAG principles are applied for generating "Artifacts" (Summaries, FAQs, Study Guides, Quizzes, Mind Maps). 
-However, instead of retrieving context for a single user question, the backend performs a broad `k=10` query using the artifact prompt as the search vector (e.g., fetching 10 chunks relevant to "main topics, arguments"). The context is injected, and the response is awaited strictly formatted as Markdown or rigid JSON.
+- Lucidity can bootstrap directly from notebook sources via `POST /api/from-notebook/{notebook_id}`.
+- Source images are transformed into textual descriptions using `llava:latest` and merged with text sources.
+- Graph generation runs asynchronously; frontend polls status and opens graph when ready.
+
+## Operational Notes
+
+- Fully local runtime, no cloud dependency required.
+- Ensure Ollama is running with all required models pulled.
+- ChromaDB persistence path is local under `data/chroma`.

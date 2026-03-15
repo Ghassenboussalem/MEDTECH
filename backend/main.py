@@ -3,6 +3,8 @@ main.py — FastAPI application: all REST endpoints for the NotebookLM clone.
 """
 import asyncio
 import base64
+import math
+import random
 import threading
 import uuid
 from typing import Literal
@@ -54,6 +56,7 @@ sessions_lock = threading.Lock()
 contexts: dict = {}
 contexts_lock = threading.Lock()
 notebook_lucidity_sessions: dict[str, str] = {}
+tutor_bandit_state: dict[str, dict] = {}
 
 
 def _get_lucidity_session(session_id: str):
@@ -210,6 +213,105 @@ class LucidityChatRequest(BaseModel):
     node_summary: str = ""
     message: str
     history: list[dict] = []
+
+
+def _bandit_key(session_id: str, node_id: str) -> str:
+    return f"{session_id}:{node_id}"
+
+
+def _default_method_stats() -> dict:
+    return {
+        "feynman": {"trials": 0, "reward": 0.0},
+        "socratic": {"trials": 0, "reward": 0.0},
+        "devil": {"trials": 0, "reward": 0.0},
+    }
+
+
+def _choose_tutor_method(stats: dict, fail_count: int) -> str:
+    methods = ["feynman", "socratic", "devil"]
+    untried = [m for m in methods if stats[m]["trials"] == 0]
+    if untried:
+        # Mild curriculum bias during exploration by fail stage.
+        if fail_count <= 1 and "feynman" in untried:
+            return "feynman"
+        if fail_count == 2 and "socratic" in untried:
+            return "socratic"
+        if fail_count >= 3 and "devil" in untried:
+            return "devil"
+        return random.choice(untried)
+
+    total_trials = sum(stats[m]["trials"] for m in methods)
+    c = 1.15
+
+    # Difficulty stage prior bonus to keep progression coherent.
+    stage_bonus = {
+        "feynman": 0.08 if fail_count <= 1 else 0.0,
+        "socratic": 0.08 if fail_count == 2 else 0.0,
+        "devil": 0.08 if fail_count >= 3 else 0.0,
+    }
+
+    best_method = "socratic"
+    best_score = -1e9
+    for m in methods:
+        t = stats[m]["trials"]
+        avg = (stats[m]["reward"] / t) if t else 0.0
+        ucb = avg + c * math.sqrt(math.log(total_trials + 1) / t)
+        score = ucb + stage_bonus[m]
+        if score > best_score:
+            best_score = score
+            best_method = m
+    return best_method
+
+
+class TutorMethodSelectRequest(BaseModel):
+    session_id: str
+    node_id: str
+    fail_count: int = 1
+
+
+class TutorMethodFeedbackRequest(BaseModel):
+    session_id: str
+    node_id: str
+    method: str
+    reward: float
+
+
+@app.post("/api/tutor-method/select")
+def tutor_method_select(body: TutorMethodSelectRequest):
+    key = _bandit_key(body.session_id, body.node_id)
+    with sessions_lock:
+        stats = tutor_bandit_state.setdefault(key, _default_method_stats())
+        method = _choose_tutor_method(stats, body.fail_count)
+        snapshot = {
+            m: {
+                "trials": stats[m]["trials"],
+                "avg_reward": round((stats[m]["reward"] / stats[m]["trials"]) if stats[m]["trials"] else 0.0, 3),
+            }
+            for m in ("feynman", "socratic", "devil")
+        }
+    return {"method": method, "stats": snapshot}
+
+
+@app.post("/api/tutor-method/feedback")
+def tutor_method_feedback(body: TutorMethodFeedbackRequest):
+    method = (body.method or "").strip().lower()
+    if method not in {"feynman", "socratic", "devil"}:
+        raise HTTPException(400, "Invalid method. Use feynman|socratic|devil")
+
+    reward = max(0.0, min(1.0, float(body.reward)))
+    key = _bandit_key(body.session_id, body.node_id)
+
+    with sessions_lock:
+        stats = tutor_bandit_state.setdefault(key, _default_method_stats())
+        stats[method]["trials"] += 1
+        stats[method]["reward"] += reward
+
+        return {
+            "ok": True,
+            "method": method,
+            "trials": stats[method]["trials"],
+            "avg_reward": round(stats[method]["reward"] / stats[method]["trials"], 3),
+        }
 
 
 @app.post("/api/chat")

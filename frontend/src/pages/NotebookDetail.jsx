@@ -10,7 +10,7 @@ export default function NotebookDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { current, loading, error, fetchNotebook } = useNotebookStore();
-  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'generate'
+  const [activeTab, setActiveTab] = useState('generate'); // 'chat' | 'generate'
 
   useEffect(() => { fetchNotebook(id); }, [id]);
 

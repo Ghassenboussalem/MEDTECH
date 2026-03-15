@@ -94,7 +94,8 @@ class GraphLayoutAgent:
                 "r": RADII["chapter"],
                 "color": COLORS["chapter"],
                 "float": FLOATS[ch_i % 3],
-                "unlocked": False,
+                # Keep the first chapter open from the start for easier entry.
+                "unlocked": ch_i == 0,
                 "mastered": False,
                 "summary": chapter.get("summary", ""),
                 "quiz": chapter.get("quiz"),
