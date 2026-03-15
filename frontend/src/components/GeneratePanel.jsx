@@ -307,7 +307,178 @@ function MindMapView({ raw }) {
 }
 
 /* ─── Markdown result ────────────────────────────────────────────── */
-function MarkdownResult({ content }) {
+function MarkdownResult({ content, enableReadAloud = false }) {
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [activeChar, setActiveChar] = useState(-1);
+  const utteranceRef = useRef(null);
+
+  const paragraphs = useMemo(() => {
+    const cleaned = content
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/^\s*[-*+]\s+/gm, '')
+      .replace(/^\s*\d+\.\s+/gm, '');
+
+    return cleaned
+      .split(/\n\s*\n/)
+      .map((p) => p.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+  }, [content]);
+
+  const speechText = useMemo(() => paragraphs.join('\n\n'), [paragraphs]);
+
+  const paragraphRanges = useMemo(() => {
+    const ranges = [];
+    let cursor = 0;
+    paragraphs.forEach((p, idx) => {
+      const start = cursor;
+      const end = start + p.length;
+      ranges.push({ start, end, idx });
+      cursor = end + 2; // account for '\n\n' separator in speechText
+    });
+    return ranges;
+  }, [paragraphs]);
+
+  useEffect(() => {
+    return () => {
+      if (window.speechSynthesis.speaking || window.speechSynthesis.paused) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    // Reset voice state when content changes.
+    setIsSpeaking(false);
+    setIsPaused(false);
+    setActiveChar(-1);
+    if (window.speechSynthesis.speaking || window.speechSynthesis.paused) {
+      window.speechSynthesis.cancel();
+    }
+  }, [content]);
+
+  const startReading = () => {
+    if (!speechText.trim()) return;
+
+    if (isPaused && window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+      setIsPaused(false);
+      setIsSpeaking(true);
+      return;
+    }
+
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+    }
+
+    const utterance = new window.SpeechSynthesisUtterance(speechText);
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    utterance.lang = 'en-US';
+
+    utterance.onstart = () => {
+      setIsSpeaking(true);
+      setIsPaused(false);
+      setActiveChar(0);
+    };
+
+    utterance.onboundary = (event) => {
+      if (typeof event.charIndex === 'number') {
+        setActiveChar(event.charIndex);
+      }
+    };
+
+    utterance.onpause = () => {
+      setIsPaused(true);
+      setIsSpeaking(false);
+    };
+
+    utterance.onresume = () => {
+      setIsPaused(false);
+      setIsSpeaking(true);
+    };
+
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      setIsPaused(false);
+      setActiveChar(-1);
+    };
+
+    utterance.onerror = () => {
+      setIsSpeaking(false);
+      setIsPaused(false);
+      setActiveChar(-1);
+    };
+
+    utteranceRef.current = utterance;
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const pauseReading = () => {
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.pause();
+      setIsPaused(true);
+      setIsSpeaking(false);
+    }
+  };
+
+  const stopReading = () => {
+    if (window.speechSynthesis.speaking || window.speechSynthesis.paused) {
+      window.speechSynthesis.cancel();
+    }
+    setIsSpeaking(false);
+    setIsPaused(false);
+    setActiveChar(-1);
+  };
+
+  const renderHighlightedParagraph = (paragraph, localChar, keyBase) => {
+    const nodes = [];
+    const wordRegex = /\S+/g;
+    let match;
+    let last = 0;
+    let idx = 0;
+
+    while ((match = wordRegex.exec(paragraph)) !== null) {
+      const start = match.index;
+      const word = match[0];
+      const end = start + word.length;
+
+      if (start > last) {
+        nodes.push(
+          <span key={`${keyBase}-text-${idx}`}>{paragraph.slice(last, start)}</span>
+        );
+      }
+
+      const isActiveWord = localChar >= start && localChar < end;
+      nodes.push(
+        <span
+          key={`${keyBase}-word-${idx}`}
+          style={
+            isActiveWord
+              ? {
+                  background: 'rgba(39,169,108,0.22)',
+                  borderRadius: 4,
+                  padding: '0 2px',
+                }
+              : undefined
+          }
+        >
+          {word}
+        </span>
+      );
+
+      last = end;
+      idx += 1;
+    }
+
+    if (last < paragraph.length) {
+      nodes.push(<span key={`${keyBase}-tail`}>{paragraph.slice(last)}</span>);
+    }
+
+    return nodes;
+  };
+
   return (
     <div style={{
       background: 'var(--bg-surface)',
@@ -316,9 +487,61 @@ function MarkdownResult({ content }) {
       padding: '20px 24px',
       boxShadow: 'var(--shadow-card)',
     }}>
+      {enableReadAloud && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <button className="btn btn-primary" onClick={startReading}>
+            {isSpeaking ? 'Reading...' : isPaused ? 'Resume reading' : 'Read aloud'}
+          </button>
+          <button
+            className="btn btn-ghost"
+            onClick={pauseReading}
+            disabled={!isSpeaking}
+            style={{ fontSize: 12, padding: '5px 10px' }}
+          >
+            Pause
+          </button>
+          <button
+            className="btn btn-ghost"
+            onClick={stopReading}
+            disabled={!isSpeaking && !isPaused}
+            style={{ fontSize: 12, padding: '5px 10px' }}
+          >
+            Stop
+          </button>
+        </div>
+      )}
+
       <div className="prose">
         <ReactMarkdown>{content}</ReactMarkdown>
       </div>
+
+      {enableReadAloud && (
+        <div style={{ marginTop: 16 }}>
+          {paragraphs.map((p, pIdx) => {
+            const range = paragraphRanges[pIdx];
+            const isActiveParagraph = activeChar >= range.start && activeChar < range.end;
+            const localChar = isActiveParagraph ? activeChar - range.start : -1;
+
+            return (
+              <p
+                key={`read-${pIdx}`}
+                style={{
+                  margin: '0 0 10px 0',
+                  lineHeight: 1.75,
+                  color: 'var(--text-secondary)',
+                  background: isActiveParagraph ? 'rgba(39,169,108,0.08)' : 'transparent',
+                  border: isActiveParagraph ? '1px solid rgba(39,169,108,0.25)' : '1px solid transparent',
+                  borderRadius: 8,
+                  padding: '6px 8px',
+                  transition: 'all var(--transition)',
+                }}
+              >
+                {renderHighlightedParagraph(p, localChar, `p-${pIdx}`)}
+              </p>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -584,7 +807,7 @@ export default function GeneratePanel({ notebookId }) {
               ? <MindMapView raw={current} />
               : active === 'learning_graph'
               ? <LearningGraphView raw={current} notebookId={notebookId} />
-              : <MarkdownResult content={current} />
+              : <MarkdownResult content={current} enableReadAloud={active === 'summary' || active === 'study_guide'} />
             }
           </>
         )}

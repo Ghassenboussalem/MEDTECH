@@ -3,6 +3,7 @@ main.py — FastAPI application: all REST endpoints for the NotebookLM clone.
 """
 import asyncio
 import base64
+import json
 import math
 import random
 import threading
@@ -30,6 +31,8 @@ import ollama
 from agents.orchestrator import OrchestratorAgent
 from agents.tutor_agent import TutorAgent
 from agents.content_agent import ContentAgent
+
+VISION_MODEL = "llava-phi3:3.8b"  # <= 5B parameters
 
 app = FastAPI(title="NotebookLM Local Clone", version="1.0.0")
 
@@ -59,6 +62,54 @@ notebook_lucidity_sessions: dict[str, str] = {}
 tutor_bandit_state: dict[str, dict] = {}
 
 
+def _notebook_cache_path(notebook_id: str) -> Path:
+    return DATA_DIR / notebook_id / "lucidity_cache.json"
+
+
+def _build_sources_snapshot(source_files: list[Path]) -> list[dict]:
+    """Build a stable snapshot so cache is invalidated whenever sources change."""
+    snapshot = []
+    for p in sorted(source_files, key=lambda x: x.name.lower()):
+        stat = p.stat()
+        snapshot.append(
+            {
+                "name": p.name,
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        )
+    return snapshot
+
+
+def _load_notebook_graph_cache(notebook_id: str) -> dict | None:
+    cache_path = _notebook_cache_path(notebook_id)
+    if not cache_path.exists():
+        return None
+    try:
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _save_notebook_graph_cache(notebook_id: str, payload: dict) -> None:
+    cache_path = _notebook_cache_path(notebook_id)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _clear_notebook_graph_cache(notebook_id: str) -> None:
+    cache_path = _notebook_cache_path(notebook_id)
+    if cache_path.exists():
+        cache_path.unlink()
+
+
+def _invalidate_notebook_lucidity_state(notebook_id: str) -> None:
+    """Reset active Lucidity state when notebook sources are updated."""
+    with sessions_lock:
+        notebook_lucidity_sessions.pop(notebook_id, None)
+    _clear_notebook_graph_cache(notebook_id)
+
+
 def _get_lucidity_session(session_id: str):
     with sessions_lock:
         return sessions.get(session_id)
@@ -70,7 +121,7 @@ def _is_image_filename(name: str) -> bool:
 
 
 def _describe_image_with_llava(image_bytes: bytes, filename: str) -> str:
-    """Generate a study-oriented description from an image using llava:latest."""
+    """Generate a study-oriented description from an image using a <=5B vision model."""
     b64_image = base64.b64encode(image_bytes).decode("utf-8")
     prompt = (
         "Describe this image for a study knowledge graph. "
@@ -78,7 +129,7 @@ def _describe_image_with_llava(image_bytes: bytes, filename: str) -> str:
         "Return one concise paragraph followed by 3-5 bullet points of key facts."
     )
     response = ollama.chat(
-        model="llava:latest",
+        model=VISION_MODEL,
         messages=[
             {
                 "role": "user",
@@ -367,6 +418,36 @@ def lucidity_from_notebook(notebook_id: str):
             "This notebook has no supported sources. Upload PDF and/or image files in Sources first.",
         )
 
+    sources_snapshot = _build_sources_snapshot(source_files)
+    cached = _load_notebook_graph_cache(notebook_id)
+    if cached and cached.get("sources_snapshot") == sources_snapshot and cached.get("graph"):
+        cached_session_id = cached.get("session_id") or str(uuid.uuid4())
+        cached_files = cached.get("files") or [p.name for p in source_files]
+        cached_lesson_title = cached.get("lesson_title") or nb.get("name", "My Lesson")
+        cached_context = cached.get("context") or ""
+
+        with sessions_lock:
+            sessions[cached_session_id] = {
+                "status": "done",
+                "stage": "✅ Graph ready!",
+                "percent": 100,
+                "graph": cached["graph"],
+                "error": None,
+                "lesson_title": cached_lesson_title,
+                "files": cached_files,
+            }
+            notebook_lucidity_sessions[notebook_id] = cached_session_id
+        with contexts_lock:
+            contexts[cached_session_id] = cached_context
+
+        return {
+            "session_id": cached_session_id,
+            "status": "done",
+            "reused": True,
+            "cached": True,
+            "files": cached_files,
+        }
+
     lesson_title = nb.get("name", "My Lesson")
     file_paths = [str(p) for p in pdf_files]
     file_names = [p.name for p in pdf_files]
@@ -404,6 +485,26 @@ def lucidity_from_notebook(notebook_id: str):
     def _run_pipeline():
         agent = OrchestratorAgent(sessions, sessions_lock, contexts, contexts_lock)
         agent.run(file_paths, file_names, lesson_title, session_id, extra_docs=extra_docs)
+
+        # Persist a notebook-level cache so reopening the notebook can be instant.
+        with sessions_lock:
+            session = sessions.get(session_id, {})
+            is_done = session.get("status") == "done"
+            graph = session.get("graph")
+        if is_done and graph:
+            with contexts_lock:
+                full_context = contexts.get(session_id, "")
+            _save_notebook_graph_cache(
+                notebook_id,
+                {
+                    "session_id": session_id,
+                    "lesson_title": lesson_title,
+                    "files": file_names,
+                    "graph": graph,
+                    "context": full_context,
+                    "sources_snapshot": sources_snapshot,
+                },
+            )
 
     threading.Thread(target=_run_pipeline, daemon=True).start()
 
@@ -481,6 +582,7 @@ async def upload_source(notebook_id: str, file: UploadFile = File(...)):
     # Run embedding in a thread to avoid blocking the event loop
     await asyncio.to_thread(vec_store.add_chunks, notebook_id, chunks)
     nb_store.add_source(notebook_id, file.filename)
+    _invalidate_notebook_lucidity_state(notebook_id)
 
     return {"filename": file.filename, "chunks_indexed": len(chunks)}
 
@@ -506,6 +608,7 @@ async def upload_url(notebook_id: str, body: UrlUpload):
     source_name = chunks[0]["source"] if chunks else body.url
     await asyncio.to_thread(vec_store.add_chunks, notebook_id, chunks)
     nb_store.add_source(notebook_id, source_name)
+    _invalidate_notebook_lucidity_state(notebook_id)
     return {"url": body.url, "source_name": source_name, "chunks_indexed": len(chunks)}
 
 
