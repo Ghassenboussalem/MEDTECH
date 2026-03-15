@@ -1,14 +1,16 @@
 """
 ingest.py — Parse uploaded documents and web URLs into overlapping text chunks.
 
-Supported formats: PDF, DOCX, TXT, URL
+Supported formats: PDF, DOCX, TXT/MD, image, URL
 Each returned chunk: { "text": str, "source": str, "page": int }
 """
+import base64
 import io
 import re
 from typing import BinaryIO
 
 import fitz  # PyMuPDF
+import ollama
 from docx import Document
 
 CHUNK_SIZE = 400       # characters per chunk (≈ 120-150 tokens)
@@ -49,6 +51,32 @@ def parse_txt(file_bytes: bytes, source_name: str) -> list[dict]:
     return _split_text(text, source_name, page=0)
 
 
+def parse_image(file_bytes: bytes, source_name: str) -> list[dict]:
+    """Describe an image using llava and index the description as text chunks."""
+    b64_image = base64.b64encode(file_bytes).decode("utf-8")
+    prompt = (
+        "Describe this image for study notes and knowledge graph creation. "
+        "Focus on concrete entities, labels, numbers, relationships, and notable details. "
+        "Return one concise paragraph then 3-6 bullet points."
+    )
+    resp = ollama.chat(
+        model="llava:latest",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [b64_image],
+            }
+        ],
+        stream=False,
+        options={"temperature": 0.2, "num_predict": 600},
+    )
+    description = (resp.get("message", {}) or {}).get("content", "").strip()
+    if not description:
+        description = f"Image source: {source_name}. No visual description produced."
+    return _split_text(description, source_name, page=1)
+
+
 def ingest_file(file_bytes: bytes, filename: str) -> list[dict]:
     """Auto-detect file type and return list of chunks."""
     name_lower = filename.lower()
@@ -58,6 +86,8 @@ def ingest_file(file_bytes: bytes, filename: str) -> list[dict]:
         return parse_docx(file_bytes, filename)
     elif name_lower.endswith(".txt") or name_lower.endswith(".md"):
         return parse_txt(file_bytes, filename)
+    elif name_lower.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")):
+        return parse_image(file_bytes, filename)
     else:
         # Fallback: try UTF-8 text
         return parse_txt(file_bytes, filename)

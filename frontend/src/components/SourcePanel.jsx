@@ -87,7 +87,13 @@ export default function SourcePanel({ notebookId, sources }) {
               onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
             >
               <span style={{ fontSize: '16px', lineHeight: 1.4, flexShrink: 0 }}>
-                {s.name.endsWith('.pdf') ? '📕' : s.name.endsWith('.docx') ? '📘' : '📄'}
+                {s.name.endsWith('.pdf')
+                  ? '📕'
+                  : s.name.endsWith('.docx')
+                  ? '📘'
+                  : /\.(png|jpe?g|webp|bmp|gif)$/i.test(s.name)
+                  ? '🖼️'
+                  : '📄'}
               </span>
               <div style={{ minWidth: 0 }}>
                 <p className="truncate" style={{ fontSize: '13px', fontWeight: 500 }}>{s.name}</p>

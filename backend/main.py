@@ -235,7 +235,7 @@ def lucidity_health():
 
 @app.post("/api/from-notebook/{notebook_id}")
 def lucidity_from_notebook(notebook_id: str):
-    """Create or reuse a Lucidity session using already uploaded notebook PDFs."""
+    """Create or reuse a Lucidity session using already uploaded notebook sources."""
     nb = nb_store.get_notebook(notebook_id)
     if not nb:
         raise HTTPException(404, "Notebook not found")
@@ -255,16 +255,36 @@ def lucidity_from_notebook(notebook_id: str):
     if not source_dir.exists():
         raise HTTPException(400, "No uploaded sources found for this notebook.")
 
-    pdf_files = sorted([p for p in source_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"])
-    if not pdf_files:
+    source_files = sorted([p for p in source_dir.iterdir() if p.is_file()])
+    pdf_files = [p for p in source_files if p.suffix.lower() == ".pdf"]
+    image_files = [p for p in source_files if _is_image_filename(p.name)]
+
+    if not pdf_files and not image_files:
         raise HTTPException(
             400,
-            "This notebook has no PDF sources. Upload PDF files in Sources first.",
+            "This notebook has no supported sources. Upload PDF and/or image files in Sources first.",
         )
 
     lesson_title = nb.get("name", "My Lesson")
     file_paths = [str(p) for p in pdf_files]
     file_names = [p.name for p in pdf_files]
+    extra_docs: list[dict] = []
+
+    for image_file in image_files:
+        try:
+            image_bytes = image_file.read_bytes()
+            description = _describe_image_with_llava(image_bytes, image_file.name)
+        except Exception as exc:
+            description = f"Image analysis failed for {image_file.name}: {exc}"
+
+        extra_docs.append(
+            {
+                "filename": image_file.name,
+                "text": description,
+                "page_count": 1,
+            }
+        )
+        file_names.append(image_file.name)
     session_id = str(uuid.uuid4())
 
     with sessions_lock:
@@ -281,7 +301,7 @@ def lucidity_from_notebook(notebook_id: str):
 
     def _run_pipeline():
         agent = OrchestratorAgent(sessions, sessions_lock, contexts, contexts_lock)
-        agent.run(file_paths, file_names, lesson_title, session_id)
+        agent.run(file_paths, file_names, lesson_title, session_id, extra_docs=extra_docs)
 
     threading.Thread(target=_run_pipeline, daemon=True).start()
 

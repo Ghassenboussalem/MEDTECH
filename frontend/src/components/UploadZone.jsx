@@ -7,6 +7,11 @@ const ACCEPTED = {
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
   'text/plain': ['.txt'],
   'text/markdown': ['.md'],
+  'image/png': ['.png'],
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/webp': ['.webp'],
+  'image/bmp': ['.bmp'],
+  'image/gif': ['.gif'],
 };
 
 function FileStatus({ name, status, error }) {
@@ -75,7 +80,7 @@ export default function UploadZone({ notebookId }) {
         <p style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)', marginBottom: 4 }}>
           {isDragActive ? 'Drop files here' : 'Drag & drop files'}
         </p>
-        <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>PDF · DOCX · TXT · MD</p>
+        <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>PDF · DOCX · TXT · MD · PNG · JPG · WEBP</p>
       </div>
 
       {queue.length > 0 && (
